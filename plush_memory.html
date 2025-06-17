@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Plush Memory</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #fefaf5;
+      overflow: hidden;
+    }
+
+    #image-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: none;
+    }
+
+    .memory-img-wrapper {
+      background: white;
+      padding: 8px 8px 24px 8px;
+      border-radius: 6px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+      position: absolute;
+      opacity: 0;
+      animation: fadeIn 1s forwards;
+      transition: transform 0.5s;
+    }
+
+    .memory-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 3px;
+    }
+
+    @keyframes fadeIn {
+      to { opacity: 1; }
+    }
+  </style>
+</head>
+<body>
+  <div id="image-container"></div>
+
+  <script>
+    const ws = new WebSocket("ws://localhost:8765");
+
+    ws.onmessage = function(event) {
+      if (event.data.startsWith("SHOW_IMAGE")) {
+        const ids = event.data.split(":")[1].split(",");
+        const container = document.getElementById("image-container");
+        container.innerHTML = "";
+        const latestId = ids[ids.length - 1];
+
+	//list of positions for old pictures
+	const positions = [
+		  { top: "15%", left: "15%" },
+		  { top: "45%", left: "20%" },
+		  { top: "75%", left: "18%" },
+		  { top: "80%", left: "50%" },
+		  { top: "85%", left: "75%" },
+		  { top: "18%", left: "75%" },
+		  { top: "43%", left: "78%" }
+	];
+	     
+        ids.forEach((id, index) => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "memory-img-wrapper";
+
+          const img = document.createElement("img");
+          img.src = `data/images/generated_image_${id}_head.png`;
+          img.className = "memory-img";
+          wrapper.appendChild(img);
+
+          if (id === latestId) {
+            // 中央に固定表示（最新）
+            wrapper.style.position = "fixed";
+            wrapper.style.top = "40%";
+            wrapper.style.left = "50%";
+            wrapper.style.transform = "translate(-50%, -50%) scale(0.8)";
+            wrapper.style.zIndex = 100;
+	  } else {
+	      // 古い画像（中央を避けた固定候補にランダム配置）
+	       if (positions.length === 0) return; // 位置が足りない場合は何もしない
+              const index = Math.floor(Math.random() * positions.length);
+              const pos = positions.splice(index, 1)[0]; // 使用済み座標を削除
+
+              wrapper.style.top = pos.top;
+              wrapper.style.left = pos.left;
+	      // const randomPos = positions[Math.floor(Math.random() * positions.length)];
+	      // wrapper.style.position = "fixed";
+	      // wrapper.style.top = randomPos.top;
+	      // wrapper.style.left = randomPos.left;
+
+	      const scale = 0.45 + Math.random() * 0.1; 
+	      const angle = Math.random() * 40 - 20;   // -20deg ~ +20deg
+	      wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
+	  }
+
+          container.appendChild(wrapper);
+        });
+
+        container.style.display = "block";
+      }
+    };
+  </script>
+</body>
+</html>
