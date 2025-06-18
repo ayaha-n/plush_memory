@@ -31,7 +31,7 @@ async def handler(websocket, path):
 
 async def publish_to_web(data):
     if data.data:
-        rospy.loginfo("head_touch=true")
+        rospy.loginfo("head_touch_trigger=true")
         ids = get_available_ids()
         id_string = ",".join(ids)
         message = f"SHOW_IMAGE:{id_string}"
@@ -47,7 +47,7 @@ def callback(data):
 
 async def main():
     rospy.init_node('head_touch_listener', anonymous=True)
-    rospy.Subscriber("/head_touch", Bool, callback)
+    rospy.Subscriber("/head_touch_trigger", Bool, callback)
 
     start_server = await websockets.serve(handler, "localhost", 8765)
     rospy.loginfo("WebSocket server started at ws://localhost:8765/")

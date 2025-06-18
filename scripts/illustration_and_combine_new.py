@@ -17,7 +17,7 @@ headers = {
 
 # === プロンプト定義 ===
 prompts = {
-    "shake": "Please draw this yellow bear shaking hands with this human character. Please draw in the same color tone as the bear.",
+    "hand": "Please draw this yellow bear shaking hands with this human character. Please draw in the same color tone as the bear.",
     "hug": "Please draw this yellow bear hugging with this human character. Please draw in the same color tone as the bear.",
     "head": "Please draw this human character touching the head of this yellow bear. Please draw in the same color tone as the bear. The human character should be smiling."
 }
