@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Plush Memory - Test Positions</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #fefaf5;
+      overflow: hidden;
+    }
+    #image-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+    .memory-img-wrapper {
+      background: white;
+      padding: 8px 8px 24px 8px;
+      border-radius: 6px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+      position: absolute;
+      opacity: 1;
+    }
+    .memory-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div id="image-container"></div>
+
+  <script>
+    const container = document.getElementById("image-container");
+
+    const positions = [
+	{ top: "30%", left: "5%" },
+	{ top: "28%", left: "23%" },
+	{ top: "35%", left: "39%" },
+	{ top: "55%", left: "10%" },
+	{ top: "65%", left: "36%" },
+	{ top: "75%", left: "8%" },
+	{ top: "79%", left: "40%" },
+	{ top: "81%", left: "22%" },
+	{ top: "50%", left: "25%" }
+
+    ];
+
+    const kind = "head";  // 表示したい画像のkind（"head" or "hand"）
+
+    positions.forEach((pos, index) => {
+      const wrapper = document.createElement("div");
+      wrapper.className = "memory-img-wrapper";
+
+      const img = document.createElement("img");
+      // 実環境と同じパス指定。ID部分はテスト用にインデックスを使う
+      img.src = `data/images/generated_image_2_${kind}.png`;
+      img.className = "memory-img";
+      wrapper.appendChild(img);
+
+      wrapper.style.position = "fixed";
+      wrapper.style.top = pos.top;
+      wrapper.style.left = pos.left;
+      const scale = 0.3;
+      const angle = 0;
+      wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
+
+      container.appendChild(wrapper);
+    });
+  </script>
+</body>
+</html>
