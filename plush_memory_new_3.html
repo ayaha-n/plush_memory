@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Plush Memory</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #fefaf5;
+      overflow: hidden;
+    }
+
+    #image-container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      display: none;
+    }
+
+    .memory-img-wrapper {
+      background: white;
+      padding: 8px 8px 24px 8px;
+      border-radius: 6px;
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+      position: absolute;
+      opacity: 0;
+      transition: opacity 1.5s, transform 0.5s;
+    }
+
+    .memory-img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 3px;
+    }
+  </style>
+</head>
+<body>
+  <div id="image-container"></div>
+
+  <script>
+    const ws = new WebSocket("ws://localhost:8765");
+
+    ws.onmessage = function(event) {
+      const container = document.getElementById("image-container");
+
+      if (event.data.startsWith("SHOW_IMAGE")) {
+
+        const parts = event.data.split(":");
+        const kind = parts[1];  // "head" or "hand"
+        const ids = parts[2].split(",");
+        const latestId = ids[ids.length - 1];
+        const oldIds = ids.slice(0, ids.length - 1);  // 最新以外
+        container.innerHTML = "";
+
+        const positions = [
+          { top: "32%", left: "10%" },
+          { top: "23%", left: "25%" },
+          { top: "37%", left: "41%" },
+          { top: "57%", left: "12%" },
+          { top: "67%", left: "40%" },
+          { top: "77%", left: "10%" },
+          { top: "81%", left: "42%" },
+          { top: "83%", left: "24%" },
+        ];
+
+        container.style.display = "block";
+
+        // 古い画像を順番に表示
+        oldIds.forEach((id, index) => {
+          setTimeout(() => {
+            const wrapper = document.createElement("div");
+            wrapper.className = "memory-img-wrapper";
+
+            const img = document.createElement("img");
+            img.src = `data/images/generated_image_${id}_${kind}.png`;
+            img.className = "memory-img";
+            wrapper.appendChild(img);
+
+            if (positions.length > 0) {
+              const posIndex = Math.floor(Math.random() * positions.length);
+              const pos = positions.splice(posIndex, 1)[0];
+              wrapper.style.position = "fixed";
+              wrapper.style.top = pos.top;
+              wrapper.style.left = pos.left;
+              const scale = 0.2 + Math.random() * 0.1;
+              const angle = Math.random() * 40 - 20;
+              wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
+            }
+
+            container.appendChild(wrapper);
+	    setTimeout(() => {
+		wrapper.style.opacity = 1;
+	    }, 10);  // 10msディレイで確実にフェードイン
+	  }, index * 1500);
+        });
+
+        // 最新画像を最後に表示（中央）
+        setTimeout(() => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "memory-img-wrapper";
+
+          const img = document.createElement("img");
+          img.src = `data/images/generated_image_${latestId}_${kind}.png`;
+          img.className = "memory-img";
+          wrapper.appendChild(img);
+
+          wrapper.style.position = "fixed";
+          wrapper.style.top = "52%";
+          wrapper.style.left = "27%";
+          wrapper.style.transform = "translate(-50%, -50%) scale(0.4)";
+          wrapper.style.zIndex = 100;
+
+          container.appendChild(wrapper);
+	  setTimeout(() => {
+	      wrapper.style.opacity = 1;
+	  }, 10);  // 10msディレイで確実にフェードイン
+	}, oldIds.length * 1500);
+      } else if (event.data === "HIDE_IMAGE") {
+        const wrappers = container.querySelectorAll(".memory-img-wrapper");
+        wrappers.forEach(wrapper => {
+          wrapper.style.transition = "opacity 1.5s";
+          wrapper.style.opacity = 0;
+        });
+        setTimeout(() => {
+          container.innerHTML = "";
+          container.style.display = "none";
+        }, 1500);
+      }
+    };
+  </script>
+</body>
+</html>
