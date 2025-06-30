@@ -31,7 +31,7 @@ def get_participant_ids():
         m = re.match(r"sample_image_(\d+)\.jpg", fname)
         if m:
             ids.append(m.group(1))
-    return sorted(ids)
+    return sorted(ids, key=lambda x: int(x))
 
 def save_image_from_api(prompt, image_path, output_path):
     body = {

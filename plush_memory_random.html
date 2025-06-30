@@ -49,8 +49,6 @@
         const parts = event.data.split(":");
         const kind = parts[1];  // "head" or "hand"
         const ids = parts[2].split(",");
-        const latestId = ids[ids.length - 1];
-        const oldIds = ids.slice(0, ids.length - 1);  // 最新以外
         container.innerHTML = "";
 
         const positions = [
@@ -62,22 +60,21 @@
           { top: "77%", left: "10%" },
           { top: "81%", left: "42%" },
           { top: "83%", left: "24%" },
+	  { top: "52%", left: "27%" },
         ];
 
         container.style.display = "block";
-
 	// 表示する画像数 = positionsの数 or oldIdsの数の小さい方
-	const displayCount = Math.min(positions.length, oldIds.length);
+	const displayCount = Math.min(positions.length, ids.length);
 
 	// oldIdsからランダムにdisplayCount個選ぶ
 	const selectedIds = [];
-	const oldIdsCopy = [...oldIds];
+	const IdsCopy = [...ids];
 	for (let i = 0; i < displayCount; i++) {
-	    const idx = Math.floor(Math.random() * oldIdsCopy.length);
-	    selectedIds.push(oldIdsCopy.splice(idx, 1)[0]);
+	    const idx = Math.floor(Math.random() * IdsCopy.length);
+	    selectedIds.push(IdsCopy.splice(idx, 1)[0]);
 	}
 	  
-        // 古い画像を順番に表示
         selectedIds.forEach((id, index) => {
           setTimeout(() => {
             const wrapper = document.createElement("div");
@@ -106,27 +103,7 @@
 	  }, index * 1500);
         });
 
-        // 最新画像を最後に表示（中央）
-        setTimeout(() => {
-          const wrapper = document.createElement("div");
-          wrapper.className = "memory-img-wrapper";
-
-          const img = document.createElement("img");
-          img.src = `data/images/generated_image_${latestId}_${kind}.png`;
-          img.className = "memory-img";
-          wrapper.appendChild(img);
-
-          wrapper.style.position = "fixed";
-          wrapper.style.top = "52%";
-          wrapper.style.left = "27%";
-          wrapper.style.transform = "translate(-50%, -50%) scale(0.4)";
-          wrapper.style.zIndex = 100;
-
-          container.appendChild(wrapper);
-	  setTimeout(() => {
-	      wrapper.style.opacity = 1;
-	  }, 10);  // 10msディレイで確実にフェードイン
-	}, selectedIds.length * 1500);
+        
       } else if (event.data === "HIDE_IMAGE") {
         const wrappers = container.querySelectorAll(".memory-img-wrapper");
         wrappers.forEach(wrapper => {

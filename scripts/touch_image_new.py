@@ -14,9 +14,9 @@ trigger_states = {"hand": False, "head": False}
 def get_available_ids(kind):
     pattern = fr"generated_image_(\d+)_{kind}\.png"
     return sorted(
-        match.group(1)
-        for fname in os.listdir(image_dir)
-        if (match := re.match(pattern, fname))
+        (match.group(1) for fname in os.listdir(image_dir)
+         if (match := re.match(pattern, fname))),
+        key=int
     )
 
 async def publish_to_web(kind):
