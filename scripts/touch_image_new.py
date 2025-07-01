@@ -5,11 +5,14 @@ import asyncio
 import websockets
 import os
 import re
+import signal
+import sys
+
 
 clients = set()
 image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
 trigger_states = {"hand": False, "head": False}
-
+displaying_states = {"hand": False, "head": False}
 
 def get_available_ids(kind):
     pattern = fr"generated_image_(\d+)_{kind}\.png"
@@ -20,6 +23,11 @@ def get_available_ids(kind):
     )
 
 async def publish_to_web(kind):
+    if displaying_states[kind]:
+        rospy.loginfo(f"Already displaying {kind}, skipping new publish")
+        return
+
+    displaying_states[kind] = True
     ids = get_available_ids(kind)
     if not ids:
         rospy.loginfo(f"No {kind} images available.")
@@ -33,9 +41,10 @@ async def publish_to_web(kind):
         except:
             clients.remove(client)
      # 表示完了後のチェック
-    total_time = len(ids) * 1.5  # 1.5秒 × 枚数
+    total_time = 9 * 1.5  # 1.5秒 × 枚数
     await asyncio.sleep(total_time + 0.5)  # 安全に少し待つ
-    if not trigger_states[kind]:
+    rospy.loginfo("wait completed")
+    if not trigger_states.get(kind, False):
         # トリガーがOFFなら画像を消す
         for client in clients.copy():
             try:
@@ -43,15 +52,17 @@ async def publish_to_web(kind):
                 rospy.loginfo(f"Auto hide images for {kind}")
             except:
                 clients.remove(client)
-            
+
+    displaying_states[kind] = False
+
 def callback_hand(data):
     trigger_states["hand"] = data.data  # 最新状態を記録
-    if data.data:
+    if data.data and not displaying_states["hand"]:
         asyncio.run_coroutine_threadsafe(publish_to_web("hand"), loop)
 
 def callback_head(data):
     trigger_states["head"] = data.data
-    if data.data:
+    if data.data and not displaying_states["head"]:
         asyncio.run_coroutine_threadsafe(publish_to_web("head"), loop)
         
 async def handler(websocket, path):
@@ -69,7 +80,12 @@ async def hide_images():
             rospy.loginfo("Sent hide image command")
         except:
             clients.remove(client)
-            
+
+def shutdown_handler(signum, frame):
+    rospy.loginfo("Shutting down...")
+    loop.stop()
+    sys.exit(0)
+    
 async def main():
     rospy.init_node('touch_listener', anonymous=True)
     rospy.Subscriber("/head_touch_trigger", Bool, callback_head)
@@ -85,5 +101,6 @@ async def main():
     await start_server.wait_closed()
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGINT, shutdown_handler)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
