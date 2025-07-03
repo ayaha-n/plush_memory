@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Plush Memory</title>
+  <style>
+    body { margin: 0; background-color: #fefaf5; overflow: hidden; }
+    #image-container { position: relative; width: 100vw; height: 100vh; display: none; }
+    .memory-img-wrapper { background: white; padding: 8px 8px 24px 8px; border-radius: 6px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); position: absolute; opacity: 0; transition: opacity 1.5s, transform 0.5s; }
+    .memory-img { width: 100%; height: auto; display: block; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="image-container"></div>
+
+  <script>
+    const ws = new WebSocket("ws://localhost:8765");
+    ws.onmessage = function(event) {
+      const container = document.getElementById("image-container");
+
+      if (event.data.startsWith("SHOW_IMAGE")) {
+        const parts = event.data.split(":");
+        const kind = parts[1];
+        const ids = parts[2].split(",");
+        container.innerHTML = "";
+        container.style.display = "block";
+
+        const positions = [
+          { top: "25%", left: "10%" },
+          { top: "18%", left: "25%" },
+          { top: "32%", left: "41%" },
+          { top: "52%", left: "12%" },
+          { top: "58%", left: "40%" },
+          { top: "70%", left: "10%" },
+          { top: "74%", left: "42%" },
+          { top: "72%", left: "24%" },
+	  { top: "47%", left: "27%" },
+        ];
+
+	const displayCount = Math.min(positions.length, ids.length);
+	const selectedIds = [];
+	const IdsCopy = [...ids];
+	for (let i = 0; i < displayCount; i++) {
+	    const idx = Math.floor(Math.random() * IdsCopy.length);
+	    selectedIds.push(IdsCopy.splice(idx, 1)[0]);
+	}
+	  
+        selectedIds.forEach((id, index) => {
+            setTimeout(() => {
+            const wrapper = document.createElement("div");
+            wrapper.className = "memory-img-wrapper";
+            wrapper.id = `img-${id}`;
+            const img = document.createElement("img");
+            img.src = `data/images/generated_image_${id}_${kind}.png`;
+            img.className = "memory-img";
+            wrapper.appendChild(img);
+
+            const pos = positions[index % positions.length];
+            wrapper.style.position = "fixed";
+            wrapper.style.top = pos.top;
+            wrapper.style.left = pos.left;
+            const scale = 0.2 + Math.random() * 0.1;
+            const angle = Math.random() * 40 - 20;
+            wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
+            container.appendChild(wrapper);
+            setTimeout(() => { wrapper.style.opacity = 1; }, 20);
+          }, index * 1500);
+        });
+
+      } else if (event.data.startsWith("HIDE_IMAGE:")) {
+        const imgId = event.data.split(":")[1];
+        const wrapper = document.getElementById(`img-${imgId}`);
+        if (wrapper) {
+          wrapper.style.opacity = 0;
+          setTimeout(() => wrapper.remove(), 1500);
+        }
+      } else if (event.data === "HIDE_IMAGE_ALL") {
+        const wrappers = container.querySelectorAll(".memory-img-wrapper");
+        wrappers.forEach(wrapper => {
+          wrapper.style.opacity = 0;
+          setTimeout(() => wrapper.remove(), 1500);
+        });
+        setTimeout(() => { container.innerHTML = ""; container.style.display = "none"; }, 1500);
+      }
+    };
+  </script>
+</body>
+</html>
