@@ -14,7 +14,8 @@
   <div id="image-container"></div>
 
   <script>
-    const ws = new WebSocket("ws://localhost:8765");
+    // const ws = new WebSocket("ws://localhost:8765");
+    const ws = new WebSocket(`ws://${location.hostname}:8765/`);
     ws.onmessage = function(event) {
       const container = document.getElementById("image-container");
 

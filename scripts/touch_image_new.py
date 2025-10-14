@@ -91,7 +91,8 @@ async def main():
     rospy.Subscriber("/head_touch_trigger", Bool, callback_head)
     rospy.Subscriber("/hand_touch_trigger", Bool, callback_hand)
 
-    start_server = await websockets.serve(handler, "localhost", 8765)
+    #start_server = await websockets.serve(handler, "localhost", 8765)
+    start_server = await websockets.serve(handler, "0.0.0.0", 8765)
     rospy.loginfo("WebSocket server started at ws://localhost:8765/")
 
     while not rospy.is_shutdown():
