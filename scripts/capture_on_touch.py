@@ -3,24 +3,26 @@
 import os, glob, subprocess, rospy, time
 from std_msgs.msg import Bool
 
-OUTPUT_DIR = os.path.expanduser("~/ros/catkin_ws/src/plush_memory/data/images/raw_picture")
+path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
+path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
 DEVICE = rospy.get_param("/touch_capture/device", "/dev/video9")  
 VIDEO_SIZE = rospy.get_param("/touch_capture/video_size", "848x480")    # "424x240" is also fine
 INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")   
-PREFIX = "person_image_"
+PREFIX = "raw_image_"
+COM_PREFIX = "combined_drawing_"
 FFMPEG = "ffmpeg"
 
 def next_filename():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    files = sorted(glob.glob(os.path.join(OUTPUT_DIR, f"{PREFIX}[0-9]*.jpg")))
+    os.makedirs(path_to_raw_dir, exist_ok=True)
+    files = sorted(glob.glob(os.path.join(path_to_dir, f"{COM_PREFIX}[0-9]*.png")))
     last_num = 0
     if files:
         base = os.path.splitext(os.path.basename(files[-1]))[0]
         try:
-            last_num = int(base.replace(PREFIX, ""))
+            last_num = int(base.replace(COM_PREFIX, ""))
         except ValueError:
             pass
-    return os.path.join(OUTPUT_DIR, f"{PREFIX}{last_num+1:04d}.jpg")
+    return os.path.join(path_to_raw_dir, f"{PREFIX}{last_num+1:04d}.jpg")
 
 def save_one():
     out_path = next_filename()
