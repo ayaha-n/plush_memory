@@ -69,7 +69,7 @@ async def show_and_schedule_hide(kind):
         if currently_showing_kind == kind and not trigger_states.get(kind, False):
             currently_showing_kind = None
             rospy.loginfo(f"currently_showing_kind reset to None")
-        hyde_all_images()
+        hide_all_images()
     except asyncio.CancelledError:
         rospy.loginfo(f"Show+wait task for {kind} cancelled")
 

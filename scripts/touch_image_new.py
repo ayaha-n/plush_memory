@@ -15,7 +15,8 @@ trigger_states = {"hand": False, "head": False}
 displaying_states = {"hand": False, "head": False}
 
 def get_available_ids(kind):
-    pattern = fr"generated_image_(\d+)_{kind}\.png"
+    pattern = fr"generated_drawing_(\d+)_{kind}\.png"
+    #pattern = fr"generated_image_(\d+)_{kind}\.png"
     return sorted(
         (match.group(1) for fname in os.listdir(image_dir)
          if (match := re.match(pattern, fname))),
@@ -66,11 +67,14 @@ def callback_head(data):
         asyncio.run_coroutine_threadsafe(publish_to_web("head"), loop)
         
 async def handler(websocket, path):
+    peer = websocket.remote_address
+    rospy.loginfo(f"WS connected: {peer}")
     clients.add(websocket)
     try:
         await websocket.wait_closed()
     finally:
         clients.remove(websocket)
+        rospy.loginfo(f"WS disconnected: {peer}")
 
 async def hide_images():
     message = "HIDE_IMAGE"
@@ -93,7 +97,8 @@ async def main():
 
     #start_server = await websockets.serve(handler, "localhost", 8765)
     start_server = await websockets.serve(handler, "0.0.0.0", 8765)
-    rospy.loginfo("WebSocket server started at ws://localhost:8765/")
+    #rospy.loginfo("WebSocket server started at ws://localhost:8765/")
+    rospy.loginfo("WebSocket server started at ws://0.0.0.0:8765/")
 
     while not rospy.is_shutdown():
         await asyncio.sleep(0.1)

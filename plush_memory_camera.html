@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Plush Memory</title>
+  <style>
+    body { margin: 0; background-color: #fefaf5; overflow: hidden; }
+    #image-container { position: relative; width: 100vw; height: 100vh; display: none; }
+    .memory-img-wrapper { background: white; padding: 8px 8px 24px 8px; border-radius: 6px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); position: absolute; opacity: 0; transition: opacity 1.5s, transform 0.5s; }
+    .memory-img { width: 100%; height: auto; display: block; border-radius: 3px; }
+    .newly-generated { outline: 4px solid rgba(255, 99, 0, 0.6); } /* 任意の強調 */
+  </style>
+</head>
+<body>
+  <div id="image-container"></div>
+
+  <script>
+    const ws = new WebSocket(`ws://${location.hostname}:8765/`);
+
+    // 1〜8枚目用の配置候補（過不足なく割り当てる）
+    const positions8 = [
+      { top: "25%", left: "10%" },
+      { top: "18%", left: "25%" },
+      { top: "32%", left: "41%" },
+      { top: "52%", left: "12%" },
+      { top: "58%", left: "40%" },
+      { top: "70%", left: "10%" },
+      { top: "74%", left: "42%" },
+      { top: "72%", left: "24%" },
+    ];
+    // 9枚目（最新）の固定位置
+    const position_latest = { top: "47%", left: "27%" };
+
+    function mountOne(id, kind, pos, isNew=false) {
+      const container = document.getElementById("image-container");
+      const wrapper = document.createElement("div");
+      wrapper.className = "memory-img-wrapper" + (isNew ? " newly-generated" : "");
+      wrapper.id = `img-${id}`;
+
+      const img = document.createElement("img");
+      img.src = `data/images/generated_drawing_${id}_${kind}.png`;
+      img.className = "memory-img";
+      wrapper.appendChild(img);
+
+      wrapper.style.position = "fixed";
+      wrapper.style.top = pos.top;
+      wrapper.style.left = pos.left;
+
+      const isLatest = !!isNew;
+      const scale = isLatest ? 0.3 : (0.2 + Math.random() * 0.1);  // 0.28は好みで調整可
+      const angle = isLatest ? 0 : (Math.random() * 40 - 20);
+      wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
+
+      const containerEl = document.getElementById("image-container");
+      containerEl.appendChild(wrapper);
+      setTimeout(() => { wrapper.style.opacity = 1; }, 20);
+    }
+
+    ws.onmessage = function(event) {
+      const container = document.getElementById("image-container");
+
+      if (event.data.startsWith("SHOW_IMAGE:")) {
+        const parts = event.data.split(":");
+        const kind = parts[1];
+        const ids = parts[2] ? parts[2].split(",").filter(s => s.length > 0) : [];
+
+        container.innerHTML = "";
+        container.style.display = "block";
+
+        // 使う枚数（最大8、idsが少なければ少ないだけ）
+        const k = Math.min(8, ids.length);
+
+        // 画像IDを重複なしランダム抽出（k個）
+        const idsCopy = [...ids];
+        const selectedIds = [];
+        for (let i = 0; i < k; i++) {
+          //const idx = Math.floor(Math.random() * idsCopy.length);
+            //selectedIds.push(idsCopy.splice(idx, 1)[0]);
+	    selectedIds.push(idsCopy.splice(Math.floor(Math.random()*idsCopy.length),1)[0]); 
+        }
+
+        // 位置も重複なしでちょうどk個
+        //const shuffledPositions = [...positions8].sort(() => Math.random() - 0.5);
+        //const chosenPositions = shuffledPositions.slice(0, k);
+	const chosenPositions = [...positions8].sort(() => Math.random()-0.5).slice(0,k);
+
+        // 過不足なく、1.5秒間隔で表示
+        selectedIds.forEach((id, index) => {
+          const pos = chosenPositions[index];
+          setTimeout(() => mountOne(id, kind, pos, false), index * 1500);
+        });
+
+      } else if (event.data.startsWith("APPEND_IMAGE:")) {
+        // 9枚目：固定位置で追加
+        const parts = event.data.split(":");
+        const kind = parts[1];
+        const id = parts[2];
+        setTimeout(() => mountOne(id, kind, position_latest, true), 500);
+
+      } else if (event.data.startsWith("HIDE_IMAGE:")) {
+        const imgId = event.data.split(":")[1];
+        const wrapper = document.getElementById(`img-${imgId}`);
+        if (wrapper) {
+          wrapper.style.opacity = 0;
+          setTimeout(() => wrapper.remove(), 1500);
+        }
+
+      } else if (event.data === "HIDE_IMAGE_ALL") {
+        const wrappers = container.querySelectorAll(".memory-img-wrapper");
+        wrappers.forEach(wrapper => {
+          wrapper.style.opacity = 0;
+          setTimeout(() => wrapper.remove(), 1500);
+        });
+        setTimeout(() => { container.innerHTML = ""; container.style.display = "none"; }, 1500);
+      }
+    };
+  </script>
+</body>
+</html>

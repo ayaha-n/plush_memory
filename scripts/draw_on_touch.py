@@ -20,7 +20,7 @@ headers = {
     "Authorization": f"Bearer {api_key}",
 }
 
-DEVICE = rospy.get_param("/touch_capture/device", "/dev/video9")  
+DEVICE = rospy.get_param("/touch_capture/device", "/dev/video6")  
 VIDEO_SIZE = rospy.get_param("/touch_capture/video_size", "1280x720")    # "424x240", "848x480" is also fine
 INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")   
 PREFIX = "raw_image_"
@@ -33,6 +33,7 @@ def head_callback(msg: Bool):
 def hand_callback(msg: Bool):
     if msg.data:
         save_picture_and_draw("hand")
+
 def _new_pid_from_path(p):
     return os.path.splitext(os.path.basename(p))[0].replace("raw_image_", "")
 
@@ -61,24 +62,24 @@ def save_picture_and_draw(label):
         rospy.logerr("capture failed: %s", e)
 
     pid = _new_pid_from_path(raw_image)
-    person_image = os.path.join(path_to_dir, f"person_image_{pid}.png")
+    person_drawing = os.path.join(path_to_dir, f"person_drawing_{pid}.png")
     combined_image = os.path.join(path_to_dir, f"combined_drawing_{pid}.png")
     
     #generate person_image (if it doesn't exist)
-    if not os.path.exists(person_image):
+    if not os.path.exists(person_drawing):
         success = illustration_and_combine_new.save_image_from_api(
             "Please turn this person into a cartoon-style illustration.",
             raw_image,
-            person_image
+            person_drawing
         )
         if not success:
-            rospy.logerr("Failed to create person_image for pid=%s", pid)
+            rospy.logerr("Failed to create person_drawing for pid=%s", pid)
             return  # ← ここを continue ではなく return
     
     #generate combined_image (if it doesn't exist)
     if not os.path.exists(combined_image):
         img1 = Image.open(bear_image_path)
-        img2 = Image.open(person_image)
+        img2 = Image.open(person_drawing)
         combined_width = img1.width + img2.width
         combined_height = max(img1.height, img2.height)
         combined_img = Image.new('RGBA', (combined_width, combined_height))
@@ -100,6 +101,6 @@ if __name__ == "__main__":
     rospy.Subscriber("/head_touch_trigger", Bool, head_callback, queue_size=10)
     rospy.Subscriber("/hand_touch_trigger", Bool, hand_callback, queue_size=10)
     rospy.loginfo("draw_on_touch ready. device=%s size=%s fmt=%s", DEVICE, VIDEO_SIZE, INPUT_FMT)
-rospy.spin()
+    rospy.spin()
 
 
