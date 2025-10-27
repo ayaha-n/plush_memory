@@ -15,15 +15,11 @@ PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
 
 clients = set()
 image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
-#trigger_states = {"hand": False, "head": False}
+raw_dir = os.path.join(os.path.dirname(__file__), "../data/images/raw_picture")
 trigger_states = {p: False for p in PARTS}      
-#displaying_states = {"hand": False, "head": False}
 displaying_states = {p: False for p in PARTS}      
-#shown_ids = {"head": [], "hand": []}
 shown_ids = {p: [] for p in PARTS}      
-#appended_id = {"head": None, "hand": None}
 appended_id = {p: None for p in PARTS}      
-#pending_hide = {"head": False, "hand": False}
 pending_hide = {p: False for p in PARTS}
 
 def _list_ids(kind: str):
@@ -51,6 +47,21 @@ async def _ws_broadcast(message: str):
             except KeyError:
                 pass
 
+def _delete_raw_image(img_id: int) -> bool:
+    if img_id is None or img_id < 0:
+        return False
+    path = os.path.join(raw_dir, f"raw_image_{img_id}.jpg")
+    try:
+        os.remove(path)
+        rospy.loginfo(f"Deleted raw image: {path}")
+        return True
+    except FileNotFoundError:
+        rospy.logwarn(f"Raw image not found for id={img_id}: {path}")
+        return False
+    except Exception as e:
+        rospy.logwarn(f"Failed to delete raw image '{path}': {e}")
+        return False
+    
 async def _generate_one_in_executor(kind: str):
     #generate image
     loop = asyncio.get_event_loop()
@@ -126,6 +137,7 @@ async def publish_to_web(kind: str):
             appended_id[kind] = new_id
             await _ws_broadcast(f"APPEND_IMAGE:{kind}:{new_id}")
             rospy.loginfo(f"Appended new image ({kind}): id={new_id}")
+            _delete_raw_image(new_id)
         else:
             appended_id[kind] = None
             rospy.logwarn(f"Failed to detect new image id for kind={kind}")
