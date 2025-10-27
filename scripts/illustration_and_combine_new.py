@@ -8,6 +8,7 @@ from PIL import Image
 path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
 path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
 bear_image_path = os.path.join(path_to_dir, "yellow_bear.png")
+bear_flipped_image_path = os.path.join(path_to_dir, "yellow_bear_flipped.png")
 edit_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_EDIT")
 api_key = os.getenv("AZURE_API_KEY")
 
@@ -16,10 +17,22 @@ headers = {
 }
 
 # === プロンプト定義 ===
+hand_prompt = "Please draw this yellow bear shaking hands with this human character. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear."
+
+leg_prompt = "Please draw this human character softly touching the right leg of this yellow bear. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear."
+
 prompts = {
-    "hand": "Please draw this yellow bear shaking hands with this human character. Please draw in the same color tone as the bear.",
+    "hand": hand_prompt,
+    "rarm": hand_prompt,
+    "larm": hand_prompt,
     "hug": "Please draw this yellow bear hugging with this human character. Please draw in the same color tone as the bear.",
-    "head": "Please draw this human character touching the head of this yellow bear. Please draw in the same color tone as the bear. The human character should be smiling."
+    "head": "Please draw this human character touching the head of this yellow bear. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear.",
+    #"larm": "Please draw this yellow bear shaking hands with this human character using its left hand. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear.",
+    #"rarm": "Please draw this yellow bear shaking hands with this human character using its right hand. Please draw in the same color tone as the bear.",
+    "stomach": "Please draw this human character gently patting the stomach of this yellow bear. Please draw in the same color tone as the bear. The bear should be sitting and the human character should be smiling.",
+    "rleg": leg_prompt,
+    "lleg": leg_prompt,
+    #"lleg": "Please draw this human character softly touching the left leg of this yellow bear. Please draw in the same color tone as the bear.",
 }
 
 # === ユーティリティ関数 ===

@@ -10,9 +10,12 @@ from std_msgs.msg import Bool
 import illustration_and_combine_new
 import capture_on_touch
 
+PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
+
 path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
 path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
 bear_image_path = os.path.join(path_to_dir, "yellow_bear.png")
+bear_flipped_image_path = os.path.join(path_to_dir, "yellow_bear_flipped.png")
 edit_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_EDIT")
 api_key = os.getenv("AZURE_API_KEY")
 
@@ -26,13 +29,10 @@ INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")
 PREFIX = "raw_image_"
 FFMPEG = "ffmpeg"
 
-def head_callback(msg: Bool):
-    if msg.data:
-        save_picture_and_draw("head")
-
-def hand_callback(msg: Bool):
-    if msg.data:
-        save_picture_and_draw("hand")
+def make_callback(kind: str):
+    def cb(data: Bool):
+        save_picture_and_draw(kind)
+    return cb
 
 def _new_pid_from_path(p):
     return os.path.splitext(os.path.basename(p))[0].replace("raw_image_", "")
@@ -78,7 +78,11 @@ def save_picture_and_draw(label):
     
     #generate combined_image (if it doesn't exist)
     if not os.path.exists(combined_image):
-        img1 = Image.open(bear_image_path)
+        if label == "larm":
+            img1 = Image.open(bear_flipped_image_path)
+            rospy.loginfo("use flipped image")
+        else:
+            img1 = Image.open(bear_image_path)
         img2 = Image.open(person_drawing)
         combined_width = img1.width + img2.width
         combined_height = max(img1.height, img2.height)
@@ -98,8 +102,11 @@ def save_picture_and_draw(label):
 
 if __name__ == "__main__":        
     rospy.init_node("draw_on_touch", anonymous=False)
-    rospy.Subscriber("/head_touch_trigger", Bool, head_callback, queue_size=10)
-    rospy.Subscriber("/hand_touch_trigger", Bool, hand_callback, queue_size=10)
+    #rospy.Subscriber("/head_touch_trigger", Bool, head_callback, queue_size=10)
+    #rospy.Subscriber("/hand_touch_trigger", Bool, hand_callback, queue_size=10)
+    for p in PARTS:                                                                                 
+        rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))
+
     rospy.loginfo("draw_on_touch ready. device=%s size=%s fmt=%s", DEVICE, VIDEO_SIZE, INPUT_FMT)
     rospy.spin()
 

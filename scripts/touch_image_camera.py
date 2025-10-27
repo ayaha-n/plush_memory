@@ -11,14 +11,20 @@ import time
 import random
 import draw_on_touch
 
+PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
+
 clients = set()
 image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
-trigger_states = {"hand": False, "head": False}
-displaying_states = {"hand": False, "head": False}
-
-shown_ids = {"head": [], "hand": []}
-appended_id = {"head": None, "hand": None}
-pending_hide = {"head": False, "hand": False}
+#trigger_states = {"hand": False, "head": False}
+trigger_states = {p: False for p in PARTS}      
+#displaying_states = {"hand": False, "head": False}
+displaying_states = {p: False for p in PARTS}      
+#shown_ids = {"head": [], "hand": []}
+shown_ids = {p: [] for p in PARTS}      
+#appended_id = {"head": None, "hand": None}
+appended_id = {p: None for p in PARTS}      
+#pending_hide = {"head": False, "hand": False}
+pending_hide = {p: False for p in PARTS}
 
 def _list_ids(kind: str):
     pat = re.compile(rf"generated_drawing_(\d+)_{kind}\.png$")
@@ -133,36 +139,23 @@ async def publish_to_web(kind: str):
     finally:
         displaying_states[kind] = False
 
-def callback_hand(data: Bool):
-    trigger_states["hand"] = data.data
-    rospy.loginfo(f"hand trigger_states is {data.data}") 
-    if data.data:
-        if not displaying_states["hand"]:
-            asyncio.run_coroutine_threadsafe(publish_to_web("hand"), loop)
+def make_callback(kind: str):
+    def cb(data: Bool):
+        trigger_states[kind] = data.data
+        rospy.loginfo(f"{kind} trigger_states is {data.data}")
+        if data.data:
+            if not displaying_states[kind]:
+                asyncio.run_coroutine_threadsafe(publish_to_web(kind), loop)
+            else:
+                rospy.loginfo(f"Already displaying {kind}, skipping")
         else:
-            rospy.loginfo(f"Already displaying hand, skipping")
-    elif not data.data:
-        # 表示中ならフラグ、表示済みなら今消す
-        if displaying_states["hand"]:
-            pending_hide["hand"] = True
-        elif shown_ids["hand"] or appended_id["hand"] is not None:
-            asyncio.run_coroutine_threadsafe(hide_current("hand"), loop)
-            rospy.loginfo(f"Post-show auto hide (one by one) for hand")
-
-def callback_head(data: Bool):
-    trigger_states["head"] = data.data
-    rospy.loginfo(f"head trigger_states is {data.data}") 
-    if data.data:
-        if not displaying_states["head"]:
-            asyncio.run_coroutine_threadsafe(publish_to_web("head"), loop)
-        else:
-            rospy.loginfo(f"Already displaying head, skipping")
-    elif not data.data:
-        if displaying_states["head"]:
-            pending_hide["head"] = True
-        elif shown_ids["head"] or appended_id["head"] is not None:
-            asyncio.run_coroutine_threadsafe(hide_current("head"), loop)
-            rospy.loginfo(f"Post-show auto hide (one by one) for hand")
+            if displaying_states[kind]:
+                pending_hide[kind] = True
+                rospy.loginfo(f"{kind} pending_hide set True")
+            elif shown_ids[kind] or appended_id[kind] is not None:
+                rospy.loginfo(f"{kind} false after show -> hide_current({kind})")
+                asyncio.run_coroutine_threadsafe(hide_current(kind), loop)
+    return cb
 
 async def handler(websocket, path):
     peer = websocket.remote_address
@@ -181,8 +174,10 @@ def shutdown_handler(signum, frame):
 
 async def main():
     rospy.init_node('touch_image_camera', anonymous=True)
-    rospy.Subscriber("/head_touch_trigger", Bool, callback_head)
-    rospy.Subscriber("/hand_touch_trigger", Bool, callback_hand)
+    #rospy.Subscriber("/head_touch_trigger", Bool, callback_head)
+    #rospy.Subscriber("/hand_touch_trigger", Bool, callback_hand)
+    for p in PARTS:                                                                                 
+        rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))
 
     server = await websockets.serve(handler, "0.0.0.0", 8765)
     rospy.loginfo("WebSocket server started at ws://0.0.0.0:8765/")
