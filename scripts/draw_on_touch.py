@@ -23,7 +23,7 @@ headers = {
     "Authorization": f"Bearer {api_key}",
 }
 
-DEVICE = rospy.get_param("/touch_capture/device", "/dev/video6")  
+DEVICE = rospy.get_param("/touch_capture/device", "/dev/camera_d405")  
 VIDEO_SIZE = rospy.get_param("/touch_capture/video_size", "1280x720")    # "424x240", "848x480" is also fine
 INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")   
 PREFIX = "raw_image_"
@@ -57,7 +57,7 @@ def save_picture_and_draw(label):
         else:
             rospy.logerr("ffmpeg failed (code=%s)\n%s", proc.returncode, proc.stdout.decode("utf-8", "ignore"))
     except subprocess.TimeoutExpired:
-        rospy.logerr("ffmpeg timeout (device busy? try: fuser -v /dev/video9)")
+        rospy.logerr("ffmpeg timeout (device busy? try: fuser -v /dev/camera_d405)")
     except Exception as e:
         rospy.logerr("capture failed: %s", e)
 

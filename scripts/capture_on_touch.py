@@ -5,7 +5,7 @@ from std_msgs.msg import Bool
 
 path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
 path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
-DEVICE = rospy.get_param("/touch_capture/device", "/dev/video9")  
+DEVICE = rospy.get_param("/touch_capture/device", "/dev/camera_d405")  
 VIDEO_SIZE = rospy.get_param("/touch_capture/video_size", "848x480")    # "424x240" is also fine
 INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")   
 PREFIX = "raw_image_"
