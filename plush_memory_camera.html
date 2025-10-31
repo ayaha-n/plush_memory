@@ -31,6 +31,21 @@
     // 9枚目（最新）の固定位置
     const position_latest = { top: "47%", left: "27%" };
 
+    const TMP_TOP_MIN = 15, TMP_TOP_MAX = 75;   // %
+    const TMP_LEFT_MIN = 10, TMP_LEFT_MAX = 45; // %
+
+    const displaying_time = 2000;
+    
+    function rand(min, max) {
+	return Math.random() * (max - min) + min;
+    }
+    function randomTmpPos() {
+	return {
+	    top:  `${rand(TMP_TOP_MIN,  TMP_TOP_MAX).toFixed(1)}%`,
+	    left: `${rand(TMP_LEFT_MIN, TMP_LEFT_MAX).toFixed(1)}%`,
+	};
+    }
+
     function mountOne(id, kind, pos, isNew=false) {
       const container = document.getElementById("image-container");
       const wrapper = document.createElement("div");
@@ -87,8 +102,15 @@
         // 過不足なく、1.5秒間隔で表示
         selectedIds.forEach((id, index) => {
           const pos = chosenPositions[index];
-          setTimeout(() => mountOne(id, kind, pos, false), index * 1500);
+          setTimeout(() => mountOne(id, kind, pos, false), index * displaying_time);
         });
+
+      } else if (event.data.startsWith("TMP_IMAGE:")) {
+      const parts = event.data.split(":");
+      const kind = parts[1];
+      const id = parts[2];
+      const pos = randomTmpPos();
+	  mountOne(id, kind, pos, false);
 
       } else if (event.data.startsWith("APPEND_IMAGE:")) {
         // 9枚目：固定位置で追加
@@ -102,16 +124,16 @@
         const wrapper = document.getElementById(`img-${imgId}`);
         if (wrapper) {
           wrapper.style.opacity = 0;
-          setTimeout(() => wrapper.remove(), 1500);
+          setTimeout(() => wrapper.remove(), displaying_time);
         }
 
       } else if (event.data === "HIDE_IMAGE_ALL") {
         const wrappers = container.querySelectorAll(".memory-img-wrapper");
         wrappers.forEach(wrapper => {
           wrapper.style.opacity = 0;
-          setTimeout(() => wrapper.remove(), 1500);
+          setTimeout(() => wrapper.remove(), displaying_time);
         });
-        setTimeout(() => { container.innerHTML = ""; container.style.display = "none"; }, 1500);
+        setTimeout(() => { container.innerHTML = ""; container.style.display = "none"; }, displaying_time);
       }
     };
   </script>

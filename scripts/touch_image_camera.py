@@ -19,6 +19,7 @@ raw_dir = os.path.join(os.path.dirname(__file__), "../data/images/raw_picture")
 trigger_states = {p: False for p in PARTS}      
 displaying_states = {p: False for p in PARTS}      
 shown_ids = {p: [] for p in PARTS}      
+temp_ids = {p: [] for p in PARTS} 
 appended_id = {p: None for p in PARTS}      
 pending_hide = {p: False for p in PARTS}
 gen_session = 0
@@ -86,6 +87,25 @@ def _pick_fallback_id(kind: str, selected_ids):
         return -1
     return max(remaining)
 
+async def _append_while_generating(kind: str, local_session: int, selected_base: list, gen_task: asyncio.Task):
+    def make_pool():
+        ids_all = _list_ids(kind)
+        used = set(selected_base) | set(temp_ids[kind])
+        return [i for i in ids_all if i not in used]
+
+    while True:
+        # stop when...
+        if gen_task.done() or (not _is_session_valid(local_session)):
+            return
+
+        pool = make_pool()
+
+        img_id = random.choice(pool)
+        temp_ids[kind].append(img_id)
+        await _ws_broadcast(f"TMP_IMAGE:{kind}:{img_id}")
+        # interval to next image
+        await asyncio.sleep(1.5)
+
 async def _send_hide_image(img_id):
     msg = f"HIDE_IMAGE:{img_id}"
     for ws in list(clients):
@@ -101,9 +121,13 @@ async def hide_current(kind: str):
     for img_id in shown_ids[kind]:
         await _send_hide_image(img_id)
         await asyncio.sleep(1.0)
+    for img_id in temp_ids[kind]:
+        await _send_hide_image(img_id)
+        await asyncio.sleep(0.2)
     if appended_id[kind] is not None:
         await _send_hide_image(appended_id[kind])
     shown_ids[kind] = []
+    temp_ids[kind] = []
     appended_id[kind] = None
 
 def _is_session_valid(local_session: int) -> bool:
@@ -148,13 +172,22 @@ async def publish_to_web(kind: str):
         id_string = ",".join(str(i) for i in selected)
         await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
         rospy.loginfo(f"Sent {kind} image list (n={len(selected)})")
-        #await asyncio.sleep(k * 1.5 + 0.5)
+        await asyncio.sleep(k * 2.0 + 0.5)
+
+        temp_loop = asyncio.create_task(_append_while_generating(kind, local_session, selected, gen_task))
 
         # wait for generating drawing
         try:
             await gen_task
         except asyncio.CancelledError:
             rospy.loginfo(f"{kind} generation task cancelled")
+
+        if not temp_loop.done():
+            temp_loop.cancel()
+            try:
+                await temp_loop
+            except asyncio.CancelledError:
+                pass
 
         # if session is invalid after generation, delete raw image  
         if not _is_session_valid(local_session):
