@@ -21,6 +21,7 @@ displaying_states = {p: False for p in PARTS}
 shown_ids = {p: [] for p in PARTS}      
 appended_id = {p: None for p in PARTS}      
 pending_hide = {p: False for p in PARTS}
+gen_session = 0
 
 def _list_ids(kind: str):
     pat = re.compile(rf"generated_drawing_(\d+)_{kind}\.png$")
@@ -67,7 +68,7 @@ async def _generate_one_in_executor(kind: str):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, draw_on_touch.save_picture_and_draw, kind)
 
-def _detect_new_id(kind: str, before_set, timeout_sec=60.0, poll_interval=0.5) -> int:
+def _detect_new_id(kind: str, before_set, timeout_sec, poll_interval=0.5) -> int:
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
         after = _idset(kind)
@@ -76,6 +77,14 @@ def _detect_new_id(kind: str, before_set, timeout_sec=60.0, poll_interval=0.5) -
             return max(diff)
         time.sleep(poll_interval)
     return -1
+
+def _pick_fallback_id(kind: str, selected_ids):
+    # if generation fails, select the 9th image
+    ids_all = _list_ids(kind)
+    remaining = [i for i in ids_all if i not in selected_ids]
+    if not remaining:
+        return -1
+    return max(remaining)
 
 async def _send_hide_image(img_id):
     msg = f"HIDE_IMAGE:{img_id}"
@@ -94,11 +103,18 @@ async def hide_current(kind: str):
         await asyncio.sleep(1.0)
     if appended_id[kind] is not None:
         await _send_hide_image(appended_id[kind])
+    shown_ids[kind] = []
+    appended_id[kind] = None
+
+def _is_session_valid(local_session: int) -> bool:
+    return gen_session == local_session
         
 async def publish_to_web(kind: str):
     if displaying_states[kind]:
         rospy.loginfo(f"Already displaying {kind}, skipping")
         return
+
+    local_session = gen_session
 
     displaying_states[kind] = True
     shown_ids[kind] = []
@@ -114,7 +130,12 @@ async def publish_to_web(kind: str):
         # select 8 images
         k = min(8, len(ids_now))
         selected = ids_now[:] if len(ids_now) <= 8 else random.sample(ids_now, 8)
-        shown_ids[kind] = selected[:]  # 記録
+        shown_ids[kind] = selected[:]
+
+        # check if session is valid
+        if not _is_session_valid(local_session):
+            rospy.loginfo(f"{kind} session invalidated before SHOW_IMAGE; abort showing")
+            return
         
         # capture
         before = set(selected) | _idset(kind)
@@ -123,26 +144,53 @@ async def publish_to_web(kind: str):
         #await _generate_one_in_executor(kind)
         gen_task = asyncio.create_task(_generate_one_in_executor(kind))
         
-        # send selected image_ids
+        # send selected image_ids and show image
         id_string = ",".join(str(i) for i in selected)
         await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
         rospy.loginfo(f"Sent {kind} image list (n={len(selected)})")
-        await asyncio.sleep(k * 1.5 + 0.5)
+        #await asyncio.sleep(k * 1.5 + 0.5)
 
-        await gen_task
-        
-        # 差分で新IDを検出 → 追加表示
-        new_id = _detect_new_id(kind, before, timeout_sec=60.0, poll_interval=0.5)
+        # wait for generating drawing
+        try:
+            await gen_task
+        except asyncio.CancelledError:
+            rospy.loginfo(f"{kind} generation task cancelled")
+
+        # if session is invalid after generation, delete raw image  
+        if not _is_session_valid(local_session):
+            rospy.loginfo(f"{kind} session invalid -> skip APPEND and cleanup")
+            new_id = _detect_new_id(kind, before, timeout_sec=0.1, poll_interval=0.1)
+            if new_id >= 0:
+                _delete_raw_image(new_id)
+            await hide_current(kind)
+            return
+
+        # detect new id and append image
+        new_id = _detect_new_id(kind, before, timeout_sec=2.0, poll_interval=0.5)
         if new_id >= 0:
             appended_id[kind] = new_id
             await _ws_broadcast(f"APPEND_IMAGE:{kind}:{new_id}")
             rospy.loginfo(f"Appended new image ({kind}): id={new_id}")
             _delete_raw_image(new_id)
         else:
-            appended_id[kind] = None
             rospy.logwarn(f"Failed to detect new image id for kind={kind}")
+            #generation failed
+            fallback_id = _pick_fallback_id(kind, selected)
 
-        await asyncio.sleep(2.0)
+            if not _is_session_valid(local_session):
+                rospy.loginfo(f"{kind} fallback skipped, hide_image")
+                await hide_current(kind)
+                pending_hide[kind] = False
+                return
+
+            if fallback_id >= 0:
+                appended_id[kind] = fallback_id
+                await _ws_broadcast(f"APPEND_IMAGE:{kind}:{fallback_id}")
+                rospy.loginfo(f"Appended FALLBACK existing image ({kind}): id={fallback_id}")
+            else:
+                rospy.loginfo(f"No fallback image available for {kind}; keep only the selected grid")
+
+        await asyncio.sleep(4.0)
         if not trigger_states.get(kind, False) or pending_hide.get(kind, False):
             # hide images if trigger is off or if pending_flag is on
             await hide_current(kind)
@@ -153,13 +201,17 @@ async def publish_to_web(kind: str):
 
 def make_callback(kind: str):
     def cb(data: Bool):
+        global gen_session
         trigger_states[kind] = data.data
-        rospy.loginfo(f"{kind} trigger_states is {data.data}")
+        #rospy.loginfo(f"{kind} trigger_states is {data.data}")
         if data.data:
             if not displaying_states[kind]:
+                gen_session += 1
+                local_session = gen_session
                 asyncio.run_coroutine_threadsafe(publish_to_web(kind), loop)
             else:
                 rospy.loginfo(f"Already displaying {kind}, skipping")
+
         else:
             if displaying_states[kind]:
                 pending_hide[kind] = True
