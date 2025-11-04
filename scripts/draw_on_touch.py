@@ -56,25 +56,29 @@ def save_picture_and_draw(label):
             rospy.loginfo("Saved: %s", raw_image)
         else:
             rospy.logerr("ffmpeg failed (code=%s)\n%s", proc.returncode, proc.stdout.decode("utf-8", "ignore"))
+            return (None, None)
     except subprocess.TimeoutExpired:
         rospy.logerr("ffmpeg timeout (device busy? try: fuser -v /dev/camera_d405)")
+        return (None, None)
     except Exception as e:
         rospy.logerr("capture failed: %s", e)
+        return (None, None)
 
-    pid = _new_pid_from_path(raw_image)
-    person_drawing = os.path.join(path_to_dir, f"person_drawing_{pid}.png")
-    combined_image = os.path.join(path_to_dir, f"combined_drawing_{pid}.png")
+    pid_str = _new_pid_from_path(raw_image)
+    pid_int = int(pid_str)
+    person_drawing = os.path.join(path_to_dir, f"person_drawing_{pid_str}.png")
+    combined_image = os.path.join(path_to_dir, f"combined_drawing_{pid_str}.png")
     
     #generate person_image (if it doesn't exist)
     if not os.path.exists(person_drawing):
         success = illustration_and_combine_new.save_image_from_api(
-            "Please turn this person into a cartoon-style illustration.",
+            "Please turn this person into a cartoon-style,  illustration. Absolutely avoid photorealism. Remove or alter distinctive marks, logos, and text.",
             raw_image,
             person_drawing
         )
         if not success:
-            rospy.logerr("Failed to create person_drawing for pid=%s", pid)
-            return  # ← ここを continue ではなく return
+            rospy.logerr("Failed to create person_drawing for pid=%s", pid_str)
+            return (None, pid_int)
     
     #generate combined_image (if it doesn't exist)
     if not os.path.exists(combined_image):
@@ -94,11 +98,15 @@ def save_picture_and_draw(label):
 
     # generate final image
     prompt=illustration_and_combine_new.prompts[label]
-    output_path = os.path.join(path_to_dir, f"generated_drawing_{pid}_{label}.png")
+    output_path = os.path.join(path_to_dir, f"generated_drawing_{pid_str}_{label}.png")
     if not os.path.exists(output_path):
-        illustration_and_combine_new.save_image_from_api(prompt, combined_image, output_path)
+        success = illustration_and_combine_new.save_image_from_api(prompt, combined_image, output_path)
+        if not success or not os.path.exists(output_path):
+            rospy.logwarn("Failed to generate final image for pid=%s label=%s", pid_str, label)
+            return (None, pid_int)
     else:
         print(f"Already exists: {output_path}")
+    return (pid_int, pid_int)
 
 if __name__ == "__main__":        
     rospy.init_node("draw_on_touch", anonymous=False)
