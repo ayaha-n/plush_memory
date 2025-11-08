@@ -6,7 +6,9 @@
   <style>
     body { margin: 0; background-color: #fefaf5; overflow: hidden; }
     #image-container { position: relative; width: 100vw; height: 100vh; display: none; }
-    .memory-img-wrapper { background: white; padding: 8px 8px 24px 8px; border-radius: 6px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); position: absolute; opacity: 0; transition: opacity 1.5s, transform 0.5s; }
+    .memory-img-wrapper { background: white; padding: 8px 8px 24px 8px; border-radius: 6px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3); position: absolute; opacity: 0; transition: opacity 1.5s, transform 0.5s; transform-origin: center center; }
+    .memory-img-wrapper { width: 22vw; }
+    .memory-img-wrapper.latest { width: 28vw; }
     .memory-img { width: 100%; height: auto; display: block; border-radius: 3px; }
     .newly-generated { outline: 4px solid rgba(255, 99, 0, 0.6); } /* 任意の強調 */
   </style>
@@ -20,19 +22,19 @@
     // 1〜8枚目用の配置候補（過不足なく割り当てる）
     const positions8 = [
       { top: "25%", left: "10%" },
-      { top: "18%", left: "25%" },
+      { top: "18%", left: "85%" },
       { top: "32%", left: "41%" },
       { top: "52%", left: "12%" },
-      { top: "58%", left: "40%" },
+      { top: "58%", left: "80%" },
       { top: "70%", left: "10%" },
       { top: "74%", left: "42%" },
-      { top: "72%", left: "24%" },
+      { top: "72%", left: "87%" },
     ];
     // 9枚目（最新）の固定位置
-    const position_latest = { top: "47%", left: "27%" };
+    const position_latest = { top: "47%", left: "50%" };
 
     const TMP_TOP_MIN = 15, TMP_TOP_MAX = 75;   // %
-    const TMP_LEFT_MIN = 10, TMP_LEFT_MAX = 45; // %
+    const TMP_LEFT_MIN = 10, TMP_LEFT_MAX = 90; // %
 
     const displaying_time = 2000;
     
@@ -49,7 +51,7 @@
     function mountOne(id, kind, pos, isNew=false) {
       const container = document.getElementById("image-container");
       const wrapper = document.createElement("div");
-      wrapper.className = "memory-img-wrapper" + (isNew ? " newly-generated" : "");
+      wrapper.className = "memory-img-wrapper" + (isNew ? " newly-generated latest" : "");
       wrapper.id = `img-${id}`;
 
       const img = document.createElement("img");
@@ -62,7 +64,7 @@
       wrapper.style.left = pos.left;
 
       const isLatest = !!isNew;
-      const scale = isLatest ? 0.3 : (0.2 + Math.random() * 0.1);  // 0.28は好みで調整可
+      const scale = isLatest ? 0.7 : (0.45 + Math.random() * 0.15);
       const angle = isLatest ? 0 : (Math.random() * 40 - 20);
       wrapper.style.transform = `translate(-50%, -50%) scale(${scale}) rotate(${angle}deg)`;
 
