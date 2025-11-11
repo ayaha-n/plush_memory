@@ -87,6 +87,8 @@ def _pick_fallback_id(kind: str):
     remaining = [i for i in ids_all if i not in shown_ids[kind]]
     if not remaining:
         return -1
+    if not ENABLE_GENERATION:
+        return random.choice(remaining)
     return max(remaining)
 
 async def _cooperative_sleep(total_sec: float, local_session: int, step: float = 0.1):
