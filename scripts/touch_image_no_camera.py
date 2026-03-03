@@ -199,11 +199,6 @@ async def publish_to_web(kind: str):
         # capture
         before_sets[kind] = set(selected) | _idset(kind)
 
-        # generate drawing（draw_on_touch を呼ぶ）
-        if ENABLE_GENERATION:
-            gen_task = asyncio.create_task(_generate_one_in_executor(kind))
-            
-        
         # send selected image_ids and show image
         id_string = ",".join(str(i) for i in selected)
         await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
@@ -311,12 +306,7 @@ def shutdown_handler(signum, frame):
 async def main():
     rospy.init_node('touch_image_camera', anonymous=True)
 
-    global ENABLE_GENERATION
-    
-    ENABLE_GENERATION = rospy.get_param("~enable_generation", True)
-    rospy.loginfo(f"enable_generation = {ENABLE_GENERATION}")
-    
-    for p in PARTS:                                                                                 
+    for p in PARTS:                                                                            
         rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))
 
     server = await websockets.serve(handler, "0.0.0.0", 8765)
