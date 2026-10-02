@@ -29,15 +29,15 @@ INPUT_FMT = rospy.get_param("/touch_capture/input_format", "yuyv422")
 PREFIX = "raw_image_"
 FFMPEG = "ffmpeg"
 
-def make_callback(kind: str):
+def make_callback(kind: str, style: str = "shepard"):
     def cb(data: Bool):
-        save_picture_and_draw(kind)
+        save_picture_and_draw(kind, style)
     return cb
 
 def _new_pid_from_path(p):
     return os.path.splitext(os.path.basename(p))[0].replace("raw_image_", "")
 
-def save_picture_and_draw(label):
+def save_picture_and_draw(label, style: str = "shepard"):
     raw_image = capture_on_touch.next_filename()
     cmd = [
         FFMPEG, "-y",
@@ -72,9 +72,11 @@ def save_picture_and_draw(label):
     #generate person_image (if it doesn't exist)
     if not os.path.exists(person_drawing):
         success = illustration_and_combine_new.save_image_from_api(
-            "Please turn this person into a cartoon-style,  illustration. Absolutely avoid photorealism. Remove or alter distinctive marks, logos, and text.",
+            "Please turn this person into a cartoon-style illustration. Absolutely avoid "
+            "photorealism. Remove or alter distinctive marks, logos, and text.",
             raw_image,
-            person_drawing
+            person_drawing,
+            transparent=False,
         )
         if not success:
             rospy.logerr("Failed to create person_drawing for pid=%s", pid_str)
@@ -96,24 +98,36 @@ def save_picture_and_draw(label):
         combined_img.save(combined_image)
         print(f"Saved combined image: {combined_image}")
 
-    # generate final image
-    prompt=illustration_and_combine_new.prompts[label]
-    output_path = os.path.join(path_to_dir, f"generated_drawing_{pid_str}_{label}.png")
+    # generate final image, in whichever style this node was launched with
+    # (see ~display_target on touch_image_camera_new.py) — one API call, one
+    # file, shared by both the HTML display and the e-ink viewer. Filed
+    # under data/images/<style>/ rather than tagging the filename, so that
+    # fallback/memory lookups (which just scan by filename pattern) never
+    # cross-pick an image generated in a different style on some earlier
+    # day this node ran with a different ~display_target.
+    style_dir = os.path.join(path_to_dir, style)
+    os.makedirs(style_dir, exist_ok=True)
+    output_path = os.path.join(style_dir, f"generated_drawing_{pid_str}_{label}.png")
     if not os.path.exists(output_path):
-        success = illustration_and_combine_new.save_image_from_api(prompt, combined_image, output_path)
+        success = illustration_and_combine_new.save_image_from_api(
+            illustration_and_combine_new.prompt_for(label, style),
+            combined_image, output_path, transparent=(style != "classic"),
+        )
         if not success or not os.path.exists(output_path):
             rospy.logwarn("Failed to generate final image for pid=%s label=%s", pid_str, label)
             return (None, pid_int)
     else:
         print(f"Already exists: {output_path}")
+
     return (pid_int, pid_int)
 
-if __name__ == "__main__":        
+if __name__ == "__main__":
     rospy.init_node("draw_on_touch", anonymous=False)
-    #rospy.Subscriber("/head_touch_trigger", Bool, head_callback, queue_size=10)
-    #rospy.Subscriber("/hand_touch_trigger", Bool, hand_callback, queue_size=10)
-    for p in PARTS:                                                                                 
-        rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))
+    display_target = rospy.get_param("~display_target", "eink")
+    image_style = {"html": "classic", "eink": "shepard"}.get(display_target, "shepard")
+    rospy.loginfo(f"display_target = {display_target} (image_style = {image_style})")
+    for p in PARTS:
+        rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p, image_style))
 
     rospy.loginfo("draw_on_touch ready. device=%s size=%s fmt=%s", DEVICE, VIDEO_SIZE, INPUT_FMT)
     rospy.spin()

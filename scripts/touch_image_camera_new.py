@@ -26,17 +26,35 @@ before_sets = {p: set() for p in PARTS}
 gen_session = 0
 
 ENABLE_GENERATION = True
+# Which screen this run is generating for: "html" (plush_memory_camera.html,
+# flat cartoon color, opaque) or "eink" (the Paper Pro viewer, pen-and-ink +
+# watercolor, transparent cutout). Not actually run in parallel for both —
+# whichever one this node is launched for gets the single file each touch
+# produces, so this is one choice per node rather than two generations (and
+# two API calls) per touch.
+DISPLAY_TARGET = "eink"
+TARGET_TO_STYLE = {"html": "classic", "eink": "shepard"}
+IMAGE_STYLE = TARGET_TO_STYLE[DISPLAY_TARGET]
 
 def _list_ids(kind: str):
     pat = re.compile(rf"generated_drawing_(\d+)_{kind}\.png$")
-    ids = []
-    for fname in os.listdir(image_dir):
-        m = pat.match(fname)
-        if m:
-            try:
-                ids.append(int(m.group(1)))
-            except ValueError:
-                pass
+    ids = set()
+    style_dir = os.path.join(image_dir, IMAGE_STYLE)
+    # classic also looks directly under data/images/, to keep using the
+    # images generated there before the data/images/<style>/ split — those
+    # are all opaque/flat-color, so they're safe for classic (HTML) to pick
+    # up. shepard (eink) does NOT get this fallback: an unstyled root image
+    # is never guaranteed transparent/pen-and-ink, and showing an opaque one
+    # on the e-ink viewer is exactly the style-mixing this split prevents.
+    dirs = (style_dir, image_dir) if IMAGE_STYLE == "classic" else (style_dir,)
+    for d in dirs:
+        for fname in (os.listdir(d) if os.path.isdir(d) else []):
+            m = pat.match(fname)
+            if m:
+                try:
+                    ids.add(int(m.group(1)))
+                except ValueError:
+                    pass
     return sorted(ids)
 
 def _idset(kind: str):
@@ -70,7 +88,7 @@ def _delete_raw_image(img_id: int) -> bool:
 async def _generate_one_in_executor(kind: str):
     #generate image
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, draw_on_touch.save_picture_and_draw, kind)
+    return await loop.run_in_executor(None, draw_on_touch.save_picture_and_draw, kind, IMAGE_STYLE)
 
 def _detect_new_id(kind: str, before, timeout_sec, poll_interval=0.5) -> int:
     deadline = time.time() + timeout_sec
@@ -316,11 +334,21 @@ def shutdown_handler(signum, frame):
 async def main():
     rospy.init_node('touch_image_camera', anonymous=True)
 
-    global ENABLE_GENERATION
-    
+    global ENABLE_GENERATION, IMAGE_STYLE
+
     ENABLE_GENERATION = rospy.get_param("~enable_generation", True)
     rospy.loginfo(f"enable_generation = {ENABLE_GENERATION}")
-    
+
+    display_target = rospy.get_param("~display_target", "eink")
+    IMAGE_STYLE = TARGET_TO_STYLE.get(display_target, "shepard")
+    eink_hook.IMAGE_STYLE = IMAGE_STYLE
+    # Only actually push to the tablet when this run is the eink one — the
+    # eink_hook calls below are unconditional (added before ~display_target
+    # existed), so without this an html run would still push classic-style
+    # images to the tablet.
+    eink_hook.ENABLED = (display_target == "eink")
+    rospy.loginfo(f"display_target = {display_target} (image_style = {IMAGE_STYLE}, eink_hook.ENABLED = {eink_hook.ENABLED})")
+
     for p in PARTS:                                                                                 
         rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))
 

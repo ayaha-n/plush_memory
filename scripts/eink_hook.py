@@ -58,16 +58,42 @@ STAGGER_SEC = 2.0
 
 _image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
 
+# Set by touch_image_camera_new.py's main() right after it reads its own
+# ~display_target, so this looks in the same data/images/<style>/ folder
+# that node is actually writing new generations into.
+IMAGE_STYLE = "shepard"
 
-def _image_path(kind: str, img_id) -> str:
-    return os.path.join(_image_dir, f"generated_drawing_{img_id}_{kind}.png")
+
+def _image_path(kind: str, img_id):
+    """The generated image for this id, under data/images/<style>/ (see
+    IMAGE_STYLE above). Mirrors touch_image_camera_new.py's _list_ids: only
+    "classic" also falls back to data/images/ directly, for images generated
+    there before the data/images/<style>/ split — those are all opaque/
+    flat-color, so safe for an HTML (classic) run to pick up. "shepard"
+    (eink) gets no such fallback: an unstyled root image isn't guaranteed
+    transparent/pen-and-ink, and showing an opaque one on the e-ink viewer
+    is exactly the style-mixing this split exists to prevent. In practice
+    this function only runs at all when eink_hook.ENABLED (i.e. IMAGE_STYLE
+    == "shepard"), but it mirrors the classic-only fallback rule anyway in
+    case that ever changes."""
+    fname = f"generated_drawing_{img_id}_{kind}.png"
+    dirs = (
+        (os.path.join(_image_dir, IMAGE_STYLE), _image_dir)
+        if IMAGE_STYLE == "classic"
+        else (os.path.join(_image_dir, IMAGE_STYLE),)
+    )
+    for d in dirs:
+        path = os.path.join(d, fname)
+        if os.path.exists(path):
+            return path
+    return None
 
 
 async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: int, event_id: str):
     if not ENABLED:
         return
     path = _image_path(kind, img_id)
-    if not os.path.exists(path):
+    if path is None:
         return
     cx = left_frac * SCREEN_W
     cy = top_frac * SCREEN_H

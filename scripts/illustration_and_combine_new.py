@@ -18,23 +18,66 @@ headers = {
 }
 
 # === プロンプト定義 ===
-hand_prompt = "Please draw this yellow bear shaking hands with this human character. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear."
+# Action prompts, style-agnostic — pass through prompt_for() to pick a style.
+hand_prompt = "Please draw this yellow bear shaking hands with this human character. The bear should be sitting and the human character should be smiling."
 
-leg_prompt = "Please draw this human character softly touching the right leg of this yellow bear. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear."
+leg_prompt = "Please draw this human character softly touching the right leg of this yellow bear. The bear should be sitting and the human character should be smiling."
 
 prompts = {
     "hand": hand_prompt,
     "rarm": hand_prompt,
     "larm": hand_prompt,
-    "hug": "Please draw this yellow bear hugging with this human character. Please draw in the same color tone as the bear.",
-    "head": "Please draw this human character touching the head of this yellow bear. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear.",
-    #"larm": "Please draw this yellow bear shaking hands with this human character using its left hand. The bear should be sitting and the human character should be smiling. Please draw in the same color tone as the bear.",
-    #"rarm": "Please draw this yellow bear shaking hands with this human character using its right hand. Please draw in the same color tone as the bear.",
-    "stomach": "Please draw this human character gently patting the stomach of this yellow bear. Please draw in the same color tone as the bear. The bear should be sitting and the human character should be smiling.",
+    "hug": "Please draw this yellow bear hugging with this human character.",
+    "head": "Please draw this human character touching the head of this yellow bear. The bear should be sitting and the human character should be smiling.",
+    "stomach": "Please draw this human character giving a soft pat to the belly of this yellow bear plush toy. The bear should be sitting and the human character should be smiling.",
     "rleg": leg_prompt,
     "lleg": leg_prompt,
-    #"lleg": "Please draw this human character softly touching the left leg of this yellow bear. Please draw in the same color tone as the bear.",
 }
+
+# === スタイル定義 ===
+# "classic": the original flat-cartoon-color look the HTML display
+# (plush_memory_camera.html) was built around — kept as-is so it doesn't
+# need a transparent cutout.
+# "shepard": classic children's-book pen-and-ink look, after E. H. Shepard's
+# original Winnie-the-Pooh illustrations — fine linework and cross-hatching
+# with a soft watercolor wash instead of flat color fill, and a transparent
+# background (it suits one naturally, since Shepard's drawings barely have a
+# background to begin with). This is what the e-ink viewer displays.
+STYLES = {
+    "classic": " Please draw in the same color tone as the bear.",
+    "shepard": (
+        " Keep each character's face, proportions, and expression exactly as "
+        "they already appear in the reference image — do not redesign or "
+        "reinterpret the face. Only change the art medium: render it as a "
+        "delicate pen-and-ink line illustration with a soft watercolor wash, "
+        "in the style of the classic colorized editions of E. H. Shepard's "
+        "Winnie-the-Pooh drawings — fine ink linework and light "
+        "cross-hatching for shading, gentle multi-color watercolor tones "
+        "(not flat cartoon color fill), no background. Two deliberate "
+        "exceptions to \"keep it exactly as the reference\": (1) the human "
+        "character's open eye(s) must be mostly a dark pupil with a "
+        "highlight dot inside, even if the reference draws them as a flat "
+        "solid shape with no highlight — keep the eye itself small and "
+        "gentle, almond-shaped, NOT a wide staring eye with a lot of white "
+        "sclera showing. Make the highlight dot a specific, consistent "
+        "size: roughly one quarter of the pupil's diameter, not a tiny "
+        "speck and not covering most of the pupil. The human character's "
+        "gaze (pupil position) should be "
+        "turned toward the bear, so they are clearly looking at it. (2) the "
+        "bear's eyes must be two simple round button shapes, matching each "
+        "other in size and shape, each with one highlight dot sized the same "
+        "way — about one quarter of the eye's diameter. (3) if "
+        "the human character's mouth is a closed smile, draw it as one "
+        "simple gently-curved line — not an open mouth, not a jagged or "
+        "split-looking shape. For both characters, never a flat line for an "
+        "open eye, a solid color fill with no highlight, a crosshatched eye, "
+        "or a collapsed sliver."
+    ),
+}
+
+
+def prompt_for(kind: str, style: str = "shepard") -> str:
+    return prompts[kind] + STYLES[style]
 
 # === ユーティリティ関数 ===
 
@@ -47,19 +90,22 @@ def get_participant_ids():
             ids.append(m.group(1))
     return sorted(ids, key=lambda x: int(x))
 
-def save_image_from_api(prompt, image_path, output_path):
+def save_image_from_api(prompt, image_path, output_path, transparent=True):
     body = {
         "model": image_model,
         "prompt": prompt,
         "n": 1,
         "size": "1024x1024",
         "quality": "medium",
-        # Real alpha-channel cutout instead of an opaque square, so the
-        # e-ink viewer can blend soft edges straight from the source image
-        # rather than faking it with a blurred mask.
-        "background": "transparent",
         "output_format": "png",
     }
+    if transparent:
+        # Real alpha-channel cutout instead of an opaque square, so the
+        # e-ink viewer can blend soft edges straight from the source image
+        # rather than faking it with a blurred mask. Left off for the
+        # "classic" style, which the HTML display was built around as a
+        # plain opaque square.
+        body["background"] = "transparent"
     files = {
         "image": (os.path.basename(image_path), open(image_path, "rb"), "image/jpeg")
     }
@@ -100,7 +146,8 @@ if __name__ == "__main__":
             success = save_image_from_api(
                 "Please turn this person into a cartoon-style illustration.",
                 sample_image,
-                person_image
+                person_image,
+                transparent=False,
             )
             if not success:
                 continue

@@ -55,7 +55,17 @@
       wrapper.id = `img-${id}`;
 
       const img = document.createElement("img");
-      img.src = `data/images/generated_drawing_${id}_${kind}.png`;
+      // This HTML display only ever shows the "classic" style — the touch
+      // pipeline generates "shepard" (pen-and-ink, transparent) only for
+      // the e-ink viewer, under data/images/shepard/ instead. See
+      // ~display_target on touch_image_camera_new.py. Falls back to
+      // data/images/ directly for manually-seeded demo images that were
+      // dropped there without a style folder.
+      img.src = `data/images/classic/generated_drawing_${id}_${kind}.png`;
+      img.onerror = function() {
+        img.onerror = null;
+        img.src = `data/images/generated_drawing_${id}_${kind}.png`;
+      };
       img.className = "memory-img";
       wrapper.appendChild(img);
 
