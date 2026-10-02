@@ -89,7 +89,8 @@ def _image_path(kind: str, img_id):
     return None
 
 
-async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: int, event_id: str):
+async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: int,
+                 event_id: str, clear_first: bool = False):
     if not ENABLED:
         return
     path = _image_path(kind, img_id)
@@ -103,21 +104,25 @@ async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: 
         # centers that on (cx, cy) — it no longer assumes a square target_w
         # region, since a cutout's post-crop aspect ratio isn't 1:1.
         await loop.run_in_executor(
-            None, eink_memory_push.push_memory, path, cx, cy, width_px, event_id
+            None, eink_memory_push.push_memory, path, cx, cy, width_px, event_id, clear_first
         )
     except Exception as e:
         rospy.logwarn(f"eink_hook: push failed for {event_id}: {e}")
 
 
-async def _delayed_push(kind, img_id, top_frac, left_frac, width_px, delay_sec, event_id):
+async def _delayed_push(kind, img_id, top_frac, left_frac, width_px, delay_sec, event_id, clear_first=False):
     if delay_sec > 0:
         await asyncio.sleep(delay_sec)
-    await _push(kind, img_id, top_frac, left_frac, width_px, event_id)
+    await _push(kind, img_id, top_frac, left_frac, width_px, event_id, clear_first)
 
 
 def show(kind: str, selected_ids):
     """Mirror a SHOW_IMAGE broadcast: stagger up to 8 ids onto POSITIONS8,
-    same 2s-apart pacing as the HTML."""
+    same 2s-apart pacing as the HTML. Only the very first image of this
+    touch asks the viewer for its one full-panel flash (see push_memory's
+    clear_first) — a touch can end up pushing many images (this batch, plus
+    later TMP_IMAGE/APPEND_IMAGE calls), and flashing for every one of them
+    was the actual source of the flicker, not the per-tile reveal itself."""
     if not ENABLED:
         return
     positions = random.sample(POSITIONS8, min(len(selected_ids), len(POSITIONS8)))
@@ -127,6 +132,7 @@ def show(kind: str, selected_ids):
             _delayed_push(
                 kind, img_id, top, left, NORMAL_WIDTH_PX,
                 idx * STAGGER_SEC, f"show_{kind}_{img_id}",
+                clear_first=(idx == 0),
             )
         )
 
@@ -142,7 +148,11 @@ def tmp(kind: str, img_id):
 
 def append_latest(kind: str, img_id):
     """Mirror an APPEND_IMAGE broadcast: the newly generated/fallback image,
-    larger, at the fixed 'latest' spot."""
+    larger, at the fixed 'latest' spot. No clear_first here — the one flash
+    per touch happens at SHOW_IMAGE time (show(), below), matching the HTML
+    display's own reset point (it blanks `image-container` only on
+    SHOW_IMAGE, not on APPEND_IMAGE). A second flash here would double that
+    up within a single touch."""
     if not ENABLED:
         return
     top, left = POSITION_LATEST

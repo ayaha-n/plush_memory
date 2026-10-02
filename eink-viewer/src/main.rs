@@ -27,9 +27,15 @@ const SCREEN_W: usize = 1620;
 const SCREEN_H: usize = 2160;
 const STRIDE: usize = SCREEN_W * 2; // RGB565, 2 bytes/pixel
 const POLL_INTERVAL: Duration = Duration::from_millis(150);
+// Matches eink_memory_push.py's BG (#fefaf5) — the paper tone a clear_first
+// flash should reveal, not pure white, so it matches the tiles' own
+// background fill.
+const BG_RGB: (u8, u8, u8) = (254, 250, 245);
 
 #[derive(Deserialize)]
 struct Manifest {
+    #[serde(default)]
+    clear_first: bool,
     stages: Vec<Stage>,
 }
 
@@ -106,6 +112,36 @@ fn process_event(client: &mut QtfbClient, event_dir: &Path) -> io::Result<()> {
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
+    // One full-panel flash per *touch*, not per image event: dozens of tiny
+    // UFAST partial updates in a row (the tile reveal below) leave faint
+    // random-looking ghosting from un-settled gray levels, since nothing
+    // ever resets the panel's electronic state. A touch can push many image
+    // events (the SHOW_IMAGE batch, then TMP_IMAGE/APPEND_IMAGE), so only
+    // the first one sets clear_first — see eink_hook.py's show(). Matches
+    // the HTML display's own reset point: it empties image-container on
+    // SHOW_IMAGE too, not on every individual image.
+    //
+    // request_full_refresh() alone just re-drives whatever is already in
+    // the framebuffer with a cleaner waveform — it does not blank it, so
+    // without filling it first this "flash" still shows the previous
+    // touch's leftover tiles, not a clean white reset. Fill to background
+    // first so the flash actually reveals blank paper, same as the HTML's
+    // innerHTML = "" moment.
+    if manifest.clear_first {
+        fill_bg(client.framebuffer());
+        let _ = client.request_full_refresh();
+        // request_full_refresh() returns as soon as the message is sent —
+        // it doesn't wait for the panel to actually render the flash. Without
+        // a pause here, the tile loop below started overwriting the (blank)
+        // framebuffer with real tiles before the panel had rendered the
+        // blank frame at all, so the white moment never actually appeared on
+        // screen. qtfb.rs documents a ~1s server-side stall on this message;
+        // give it that long before drawing over the buffer again. 1000ms
+        // still left the first few reveal rows looking faint (drawn while
+        // the flash was still settling), so give it more margin.
+        std::thread::sleep(Duration::from_millis(1800));
+    }
+
     for stage in manifest.stages {
         let (w, h, rgb) = decode_png_rgb8(&event_dir.join(&stage.image))?;
         blit_rgb8(client.framebuffer(), stage.x, stage.y, w, h, &rgb);
@@ -163,6 +199,18 @@ fn decode_png_rgb8(path: &Path) -> io::Result<(usize, usize, Vec<u8>)> {
         }
     };
     Ok((w, h, rgb))
+}
+
+/// Fill the whole panel framebuffer with BG_RGB, so a clear_first flash
+/// reveals blank paper instead of re-driving whatever tiles were already
+/// sitting in the buffer from a previous touch.
+fn fill_bg(fb: &mut [u8]) {
+    let (r, g, b) = BG_RGB;
+    let px565: u16 = ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3);
+    let bytes = px565.to_le_bytes();
+    for px in fb.chunks_exact_mut(2) {
+        px.copy_from_slice(&bytes);
+    }
 }
 
 /// Write an RGB8 image into the RGB565 panel framebuffer at (x, y), clipped
