@@ -10,6 +10,7 @@ import sys
 import time
 import random
 import draw_on_touch
+import eink_hook
 
 PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
 
@@ -119,6 +120,7 @@ async def _append_while_generating(kind: str, local_session: int, gen_task: asyn
             #rospy.loginfo(f"shown_ids = {shown_ids[kind]}")
             #temp_ids[kind].append(img_id)
             await _ws_broadcast(f"TMP_IMAGE:{kind}:{img_id}")
+            eink_hook.tmp(kind, img_id)
             # interval to next image
         await asyncio.sleep(2.0)
 
@@ -166,6 +168,7 @@ async def _append_final_no_generation(kind: str, local_session: int):
         if fallback_id not in shown_ids[kind]:  
             shown_ids[kind].append(fallback_id)
         await _ws_broadcast(f"APPEND_IMAGE:{kind}:{fallback_id}")
+        eink_hook.append_latest(kind, fallback_id)
         rospy.loginfo(f"Appended FALLBACK existing image ({kind}): id={fallback_id}")
     else:
         rospy.loginfo(f"No fallback image available for {kind}; keep only the selected grid")
@@ -207,6 +210,7 @@ async def publish_to_web(kind: str):
         # send selected image_ids and show image
         id_string = ",".join(str(i) for i in selected)
         await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
+        eink_hook.show(kind, selected)
         rospy.loginfo(f"Sent {kind} image list (n={len(selected)})")
         #await asyncio.sleep(k * 2.0 + 0.5)
         await _cooperative_sleep(k * 2.0 + 0.5, local_session)
@@ -248,7 +252,8 @@ async def publish_to_web(kind: str):
                     shown_ids[kind].append(new_id)
                 #rospy.loginfo(f"shown_ids = {shown_ids[kind]}")
                 await _ws_broadcast(f"APPEND_IMAGE:{kind}:{new_id}")
-                rospy.loginfo(f"Appended new image ({kind}): id={new_id}")                
+                eink_hook.append_latest(kind, new_id)
+                rospy.loginfo(f"Appended new image ({kind}): id={new_id}")
                 #_delete_raw_image(new_id)
             else:
                 rospy.logwarn(f"Failed to detect new image id for kind={kind}")

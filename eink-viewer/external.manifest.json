@@ -1,0 +1,8 @@
+{
+  "id": "plush_memory_viewer",
+  "name": "Plush Memory",
+  "version": "0.1.0",
+  "description": "Shows the plush toy's touch memories as a soft-materializing collage.",
+  "application": "plush_memory_viewer",
+  "qtfb": true
+}
