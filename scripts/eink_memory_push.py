@@ -38,8 +38,36 @@ def _lerp_image(img, bg, t):
     return Image.blend(bg_img, img, t)
 
 
+def _tight_bbox(img, alpha_threshold=16):
+    """Bounding box of the non-near-transparent pixels, so we only ever
+    refresh the part of the panel the subject actually occupies — not the
+    padding around it, even though that padding is already background-
+    colored and so wouldn't look wrong left in. Falls back to the full image
+    for pictures with no real alpha (the older opaque assets)."""
+    if img.mode not in ("RGBA", "LA"):
+        return (0, 0, img.width, img.height)
+    alpha = img.split()[-1]
+    mask = alpha.point(lambda a: 255 if a > alpha_threshold else 0)
+    return mask.getbbox() or (0, 0, img.width, img.height)
+
+
+def _flatten_onto_bg(img, bg):
+    """If img has real alpha (a cutout, not just an opaque RGBA file), paste
+    it onto a solid bg-colored canvas using that alpha as the mask, so a
+    transparent background disappears into the panel's paper color instead
+    of the subject's edges staying a hard rectangle."""
+    if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+        img = img.convert("RGBA")
+        canvas = Image.new("RGB", img.size, bg)
+        canvas.paste(img, mask=img.split()[-1])
+        return canvas
+    return img.convert("RGB")
+
+
 def _make_stage_frames(image_path, out_dir, target_w):
-    img = Image.open(image_path).convert("RGB")
+    raw = Image.open(image_path)
+    raw = raw.crop(_tight_bbox(raw))  # drop the fully-transparent margin
+    img = _flatten_onto_bg(raw, BG)
     scale = target_w / img.width
     target_h = round(img.height * scale)
     img = img.resize((target_w, target_h), Image.LANCZOS)
@@ -53,14 +81,17 @@ def _make_stage_frames(image_path, out_dir, target_w):
     return stage_files, target_w, target_h
 
 
-def push_memory(image_path, x, y, target_w=360, event_id=None, host=EINK_HOST):
-    """Composite `image_path` into a materialize sequence centered at (x, y)
-    (top-left of the resized image) and push it to the tablet over SSH.
+def push_memory(image_path, cx, cy, target_w=360, event_id=None, host=EINK_HOST):
+    """Composite `image_path` into a materialize sequence centered at (cx, cy)
+    and push it to the tablet over SSH. The refreshed region is the tight
+    bounding box of the subject itself (post-crop), not a full target_w
+    square, so the panel only repaints where something actually appears.
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
 
     with tempfile.TemporaryDirectory() as tmp:
         stage_files, w, h = _make_stage_frames(image_path, tmp, target_w)
+        x, y = round(cx - w / 2), round(cy - h / 2)
         manifest = {
             "stages": [
                 {"x": x, "y": y, "image": fname, "hold_ms": hold}
@@ -94,8 +125,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} <image.png> <x> <y>")
+        print(f"usage: {sys.argv[0]} <image.png> <center_x> <center_y>")
         sys.exit(1)
-    image_path, x, y = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-    eid = push_memory(image_path, x, y)
+    image_path, cx, cy = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    eid = push_memory(image_path, cx, cy)
     print(f"pushed event {eid}")

@@ -69,12 +69,15 @@ async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: 
     path = _image_path(kind, img_id)
     if not os.path.exists(path):
         return
-    x = round(left_frac * SCREEN_W - width_px / 2)
-    y = round(top_frac * SCREEN_H - width_px / 2)  # source drawings are square
+    cx = left_frac * SCREEN_W
+    cy = top_frac * SCREEN_H
     loop = asyncio.get_event_loop()
     try:
+        # push_memory crops to the subject's own tight bounding box and
+        # centers that on (cx, cy) — it no longer assumes a square target_w
+        # region, since a cutout's post-crop aspect ratio isn't 1:1.
         await loop.run_in_executor(
-            None, eink_memory_push.push_memory, path, x, y, width_px, event_id
+            None, eink_memory_push.push_memory, path, cx, cy, width_px, event_id
         )
     except Exception as e:
         rospy.logwarn(f"eink_hook: push failed for {event_id}: {e}")
