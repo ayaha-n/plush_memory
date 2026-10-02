@@ -9,8 +9,9 @@ path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
 path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
 bear_image_path = os.path.join(path_to_dir, "yellow_bear.png")
 bear_flipped_image_path = os.path.join(path_to_dir, "yellow_bear_flipped.png")
-edit_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_EDIT")
-api_key = os.getenv("AZURE_API_KEY")
+edit_endpoint = "https://api.openai.com/v1/images/edits"
+api_key = os.getenv("OPENAI_API_KEY")
+image_model = "gpt-image-1"
 
 headers = {
     "Authorization": f"Bearer {api_key}",
@@ -48,10 +49,16 @@ def get_participant_ids():
 
 def save_image_from_api(prompt, image_path, output_path):
     body = {
+        "model": image_model,
         "prompt": prompt,
         "n": 1,
         "size": "1024x1024",
         "quality": "medium",
+        # Real alpha-channel cutout instead of an opaque square, so the
+        # e-ink viewer can blend soft edges straight from the source image
+        # rather than faking it with a blurred mask.
+        "background": "transparent",
+        "output_format": "png",
     }
     files = {
         "image": (os.path.basename(image_path), open(image_path, "rb"), "image/jpeg")
