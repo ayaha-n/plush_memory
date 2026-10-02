@@ -56,6 +56,28 @@ ssh-copy-id root@10.11.99.1          # once, to set up SSH key auth
 # launch the "Plush Memory" app from AppLoad on the tablet
 ```
 
+### Tuning the e-ink reveal/flash
+
+All of the materialize/flash behavior is a handful of constants at the top
+of `scripts/eink_memory_push.py` — edit the file and restart the node, no
+rebuild needed (only `eink-viewer/` itself needs rebuilding, for the
+`clear_first`/`settle_after` handling in `eink-viewer/src/main.rs`):
+
+| Constant | What it controls |
+|---|---|
+| `REVEAL_ORDER` | `"dither"` (scattered, more natural) or `"raster"` (top-left to bottom-right, like a scan) |
+| `TILE_COLUMNS` / `MIN_TILE_PX` | Tile grid size — fixed column count so a bigger image gets bigger tiles instead of many more of them |
+| `TILE_HOLD_MS` | Delay between tiles |
+| `FINAL_HOLD_MS` | Extra pause on the last tile before moving on |
+| `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background and flashes before its tiles start (on by default; `eink_hook.py`'s `show()` only sets this for a touch's first image either way, so toggling it doesn't cause more than one flash) |
+
+There's also an unconditional flash once a touch's images finish revealing
+(`settle_after`, wired in `eink_hook.py`'s `show()` last image and
+`append_latest()`) — it re-drives the just-drawn picture with a
+full-quality waveform so it settles crisp instead of staying at whatever
+partial gray level the fast tile-by-tile reveal left it at. That one isn't
+behind a toggle; it's cheap (no blanking) and always worth doing.
+
 ## Image data layout
 
 ```

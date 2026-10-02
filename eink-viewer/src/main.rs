@@ -36,6 +36,8 @@ const BG_RGB: (u8, u8, u8) = (254, 250, 245);
 struct Manifest {
     #[serde(default)]
     clear_first: bool,
+    #[serde(default)]
+    settle_after: bool,
     stages: Vec<Stage>,
 }
 
@@ -147,6 +149,20 @@ fn process_event(client: &mut QtfbClient, event_dir: &Path) -> io::Result<()> {
         blit_rgb8(client.framebuffer(), stage.x, stage.y, w, h, &rgb);
         let _ = client.update_partial(stage.x, stage.y, w as i32, h as i32);
         std::thread::sleep(Duration::from_millis(stage.hold_ms));
+    }
+
+    // This touch's last image: the UFAST tile-by-tile reveal above leaves
+    // the picture at whatever partially-settled gray level each tile's
+    // waveform reached, not a clean one. No fill_bg here — unlike
+    // clear_first this must not blank what was just drawn, only re-drive it
+    // with a full-quality waveform so it settles crisp.
+    if manifest.settle_after {
+        // A beat after the last tile lands (on top of its own hold_ms)
+        // before the settle flash, so the finished picture reads as a
+        // distinct "done" moment rather than the flash feeling glued to
+        // the last tile's reveal.
+        std::thread::sleep(Duration::from_millis(600));
+        let _ = client.request_full_refresh();
     }
     Ok(())
 }

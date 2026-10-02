@@ -38,6 +38,11 @@ BG = (254, 250, 245)  # matches plush_memory's HTML body background #fefaf5
 # "raster": top-left to bottom-right, like a scan — simpler, more mechanical.
 REVEAL_ORDER = "dither"
 
+# Whether a new touch blanks the panel to background first (see clear_first
+# below) before its tiles start appearing. Off leaves whatever the previous
+# touch left on screen in place until these new tiles draw over it.
+CLEAR_BEFORE_TOUCH = True
+
 TILE_COLUMNS = 8       # fixed column count, not a fixed pixel size — a
                        # larger image gets proportionally larger tiles (and
                        # roughly the same total tile count / reveal time,
@@ -131,7 +136,8 @@ def _make_tiles(image_path, out_dir, target_w):
     return tiles, target_w, target_h
 
 
-def push_memory(image_path, cx, cy, target_w=360, event_id=None, clear_first=False, host=EINK_HOST):
+def push_memory(image_path, cx, cy, target_w=360, event_id=None,
+                 clear_first=False, settle_after=False, host=EINK_HOST):
     """Composite `image_path`, slice it into small tiles, and push a reveal
     sequence (top-left to bottom-right, one tiny partial refresh per tile)
     centered at (cx, cy) to the tablet over SSH. The refreshed region is the
@@ -139,10 +145,18 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None, clear_first=Fal
     target_w square, so the panel only repaints where something actually
     appears.
 
-    `clear_first` asks the viewer to do one full-panel flash before this
-    event's tiles — pass it only for the first image of a touch (eink_hook
-    sets this), not for every image a single touch ends up showing, so the
-    panel flashes once per touch instead of once per image.
+    `clear_first` asks the viewer to blank the panel to background and flash
+    before this event's tiles — pass it only for the first image of a touch
+    (eink_hook's show() sets this, gated by CLEAR_BEFORE_TOUCH), not for
+    every image a single touch ends up showing, so the panel flashes once
+    per touch instead of once per image.
+
+    `settle_after` asks the viewer for one more flash once this event's
+    tiles are all drawn — no blanking this time, just re-driving the
+    now-complete picture with a full-quality waveform so it settles crisp
+    instead of staying at whatever partially-settled gray level the UFAST
+    tile-by-tile reveal left it at. Pass it for a touch's last image
+    (eink_hook's append_latest() sets this).
 
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
@@ -155,7 +169,7 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None, clear_first=Fal
             for left, top, tw, th, fname in tiles
         ]
         stages[-1]["hold_ms"] = FINAL_HOLD_MS
-        manifest = {"clear_first": clear_first, "stages": stages}
+        manifest = {"clear_first": clear_first, "settle_after": settle_after, "stages": stages}
         manifest_path = os.path.join(tmp, "manifest.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
