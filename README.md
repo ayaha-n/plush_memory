@@ -56,27 +56,73 @@ ssh-copy-id root@10.11.99.1          # once, to set up SSH key auth
 # launch the "Plush Memory" app from AppLoad on the tablet
 ```
 
-### Tuning the e-ink reveal/flash
+### How the e-ink reveal avoids flashing/ghosting
 
-All of the materialize/flash behavior is a handful of constants at the top
-of `scripts/eink_memory_push.py` — edit the file and restart the node, no
-rebuild needed (only `eink-viewer/` itself needs rebuilding, for the
-`clear_first`/`settle_after` handling in `eink-viewer/src/main.rs`):
+This took a lot of on-device trial and error, so it's worth writing down
+what was actually learned, not just the final knobs.
+
+**The core finding**: the panel's fast partial-refresh waveform (UFAST)
+reveals a *pure black/white* image, on a pure white background, with no
+fading or ghosting at all — however many small partial updates are done in
+a row. A grayscale/watercolor version of the exact same regions *does*
+fade, more the longer it's been since the last full refresh. A single
+color update settles cleanly on its own, so the problem isn't "too much
+area updated" or "the same pixels touched repeatedly" either — bands are
+non-overlapping (each pixel is written once) and still fade in color after
+only ~20 of them. What actually seems to accumulate is the *count* of
+sequential UFAST color/grayscale operations issued, regardless of which
+pixels each one targets — some internal waveform/calibration state that
+only a full refresh resets. Pure black/white isn't just "simpler" content;
+UFAST is seemingly tuned for exactly that binary case, so it never drifts
+in the first place and nothing needs resetting.
+
+That reframes the whole design:
+
+- **The reveal animation** (`scripts/eink_memory_push.py`) always binarizes
+  the illustration to pure black/white first (`_binarize`), and only
+  reveals *that*, never the real colors, while animating. Several reveal
+  shapes were tried: square tiles in dissolve order, and tracing the
+  binarized ink's skeleton into strokes and revealing them like pen
+  strokes (literally porting MaximeRivest/riddle's glyph-rendering
+  technique — see git history). Both worked technically, but a detailed
+  illustration's skeleton is mostly short, disconnected fragments rather
+  than one continuous line, so the stroke version read as jumping around.
+  Full-height/width **bands swept in one direction** (`REVEAL_STYLE =
+  "band"`) ended up looking the most natural — simple continuous motion,
+  no jumping. `"tile"` is kept as a second option.
+- **The color reveal** is one single ordinary partial update of the real
+  image over the whole area, once the black/white bands finish — no extra
+  full-quality flash needed, because (per the finding above) a single
+  update is never the problem.
+- **Blanking the panel for a new touch** (`clear_first`) no longer uses
+  `request_full_refresh()` (the GC16-style flash with the visible black/
+  white invert) — that call refreshes the *entire panel* (the qtfb
+  protocol carries no region for it), so it used to disturb every other
+  memory already sitting elsewhere on screen just to reset one spot. It's
+  now a background fill plus one ordinary whole-panel `update_all()` —
+  again, a single update, so no flash and no disturbance.
+
+Net effect: nothing on the e-ink display ever triggers the inverting
+full-refresh flash any more. Every visible change — the band reveal, the
+color landing, the per-touch blank — is built from partial updates that
+are each either pure black/white or a single one-shot update, which is
+exactly the case that was measured to never ghost.
+
+### Tuning the e-ink reveal
+
+A handful of constants at the top of `scripts/eink_memory_push.py` — edit
+the file and restart the node, no rebuild needed:
 
 | Constant | What it controls |
 |---|---|
-| `REVEAL_ORDER` | `"dither"` (scattered, more natural) or `"raster"` (top-left to bottom-right, like a scan) |
-| `TILE_COLUMNS` / `MIN_TILE_PX` | Tile grid size — fixed column count so a bigger image gets bigger tiles instead of many more of them |
-| `TILE_HOLD_MS` | Delay between tiles |
-| `FINAL_HOLD_MS` | Extra pause on the last tile before moving on |
-| `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background and flashes before its tiles start (on by default; `eink_hook.py`'s `show()` only sets this for a touch's first image either way, so toggling it doesn't cause more than one flash) |
-
-There's also an unconditional flash once a touch's images finish revealing
-(`settle_after`, wired in `eink_hook.py`'s `show()` last image and
-`append_latest()`) — it re-drives the just-drawn picture with a
-full-quality waveform so it settles crisp instead of staying at whatever
-partial gray level the fast tile-by-tile reveal left it at. That one isn't
-behind a toggle; it's cheap (no blanking) and always worth doing.
+| `REVEAL_STYLE` | `"band"` (full-height/width strips swept in one direction — the one that looks good) or `"tile"` (square dissolve) |
+| `BAND_COUNT` / `BAND_DIRECTION` / `BAND_HOLD_MS` | Band reveal: how many strips, `"ltr"` or `"ttb"`, delay between them |
+| `REVEAL_ORDER` | Tile reveal only: `"dither"` (scattered) or `"raster"` (scan order) |
+| `TILE_COLUMNS` / `MIN_TILE_PX` / `TILE_HOLD_MS` | Tile reveal only: grid size and pacing |
+| `FINAL_HOLD_MS` | Pause on the finished black/white picture before the color stage lands |
+| `BW_THRESHOLD` | Luminance cutoff for binarizing the reveal |
+| `BG` | Background color — the *only* place it's set; `eink-viewer` reads it from the manifest instead of hardcoding its own copy |
+| `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background before its reveal starts (on by default; only the touch's first image ever sets this, so toggling it doesn't cause more than one blank) |
 
 ## Image data layout
 

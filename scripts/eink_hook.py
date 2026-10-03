@@ -127,17 +127,17 @@ def show(kind: str, selected_ids):
     flashing for every one of them was the actual source of the flicker,
     not the per-tile reveal itself.
 
-    The *last* image of this batch also asks for settle_after. Normally
-    APPEND_IMAGE (append_latest, below) is the true last image of a touch
-    and owns that job — but when generation is disabled/fails and no
-    fallback is available, APPEND_IMAGE never fires at all (_pick_fallback_id
-    returns nothing), and this batch is all the touch ever shows. Without
-    this, that case left the whole batch's tile-reveal fading uncorrected
-    forever. A touch with a successful APPEND_IMAGE just settles twice."""
+    No settle_after here (or in append_latest, below) any more: measured on
+    -device, the final color stage settles cleanly from its own ordinary
+    UFAST partial update — it's a single update, not the long run of
+    sequential tile updates that caused fading, so it never needed the
+    extra full-quality waveform. request_full_refresh() also flashes the
+    *whole* panel (the qtfb message carries no region), so skipping it
+    stops this touch's color settle from disturbing every other memory
+    already sitting elsewhere on screen."""
     if not ENABLED:
         return
     positions = random.sample(POSITIONS8, min(len(selected_ids), len(POSITIONS8)))
-    last_idx = len(positions) - 1
     for idx, img_id in enumerate(selected_ids[: len(positions)]):
         top, left = positions[idx]
         asyncio.create_task(
@@ -145,7 +145,6 @@ def show(kind: str, selected_ids):
                 kind, img_id, top, left, NORMAL_WIDTH_PX,
                 idx * STAGGER_SEC, f"show_{kind}_{img_id}",
                 clear_first=(idx == 0 and eink_memory_push.CLEAR_BEFORE_TOUCH),
-                settle_after=(idx == last_idx),
             )
         )
 
@@ -161,13 +160,11 @@ def tmp(kind: str, img_id):
 
 def append_latest(kind: str, img_id):
     """Mirror an APPEND_IMAGE broadcast: the newly generated/fallback image,
-    larger, at the fixed 'latest' spot — and this touch's last image, so it
-    asks for settle_after (push_memory): one flash *after* its tiles are
-    drawn to settle them crisp, with no blanking beforehand (no second
-    clear_first — that would re-blank the whole panel mid-touch)."""
+    larger, at the fixed 'latest' spot. No clear_first or settle_after here
+    — see show()'s docstring for why settle_after isn't needed anywhere any
+    more, and clear_first stays SHOW_IMAGE-only to match the HTML's own
+    single reset point per touch."""
     if not ENABLED:
         return
     top, left = POSITION_LATEST
-    asyncio.create_task(
-        _push(kind, img_id, top, left, LATEST_WIDTH_PX, f"latest_{kind}_{img_id}", settle_after=True)
-    )
+    asyncio.create_task(_push(kind, img_id, top, left, LATEST_WIDTH_PX, f"latest_{kind}_{img_id}"))

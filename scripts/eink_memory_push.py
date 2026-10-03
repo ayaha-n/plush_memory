@@ -7,18 +7,31 @@ This targets the plush_memory_viewer Rust app (../eink-viewer): it watches
 then blits each frame in turn with a partial (non-flashing) e-ink refresh,
 holding each one for `hold_ms` before moving to the next.
 
-The "materializing" look is small *tiles* of the final image, revealed one
-at a time in raster order (top-left to bottom-right) rather than the whole
-picture fading in at once. This mirrors how MaximeRivest/riddle
-(https://github.com/MaximeRivest/riddle) draws Tom's ink replies: it
-traces each glyph down to a 1px-wide stroke (src/script.rs: rasterize with
-ab_glyph, skeletonize with Zhang-Suen thinning, trace into point sequences)
-and draws it as many tiny, fast partial refreshes rather than one big one —
-small update regions are what actually keeps it from flashing, more than
-the takeover-vs-windowed distinction. We don't have stroke paths for a
-photo, so tiles are the raster equivalent: each one is a small, cheap qtfb
-partial update (the same mechanism src/qtfb.rs documents there), and
-revealing them in sequence reads as the picture being filled in.
+The "materializing" look is a single smooth sweep across the image (see
+REVEAL_STYLE/_slice_bands) — inspired by how MaximeRivest/riddle
+(https://github.com/MaximeRivest/riddle) draws Tom's ink replies stroke by
+stroke via many small, fast partial refreshes rather than one big one. A
+literal port of that (skeletonize the illustration's ink, trace it into
+point sequences, reveal small chunks along each one) was tried and
+measured — see git history on this file — but a detailed illustration's
+skeleton is mostly short, disconnected fragments rather than one
+continuous line, so it read as jumping around rather than a sweep. Plain
+full-height/width bands, swept in one direction, is both simpler and reads
+as more natural movement; "tile" (square dissolve) is kept as a second
+option.
+
+Measured on-device: a pure black/white rendering, on a pure white
+background, reveals with *no* fading or ghosting at all under UFAST,
+however many small partial updates. A grayscale/watercolor version of the
+same regions does fade (the longer since the last full refresh, the more).
+So the reveal always uses a binarized (pure black/white) rendering of the
+image — see _binarize() — regardless of how colorful the actual
+illustration is. Once the reveal finishes, one last stage blits the real
+color image over the whole area in a single ordinary partial update — that
+alone settles cleanly (it's one update, not the long run of sequential
+ones that caused fading), so no extra full-quality flash is needed, and
+unlike request_full_refresh() it never disturbs other memories already
+sitting elsewhere on the panel.
 """
 import json
 import os
@@ -32,7 +45,11 @@ EINK_HOST = os.environ.get("EINK_HOST", "10.11.99.1")
 EINK_APP_DIR = "/home/root/xovi/exthome/appload/plush_memory_viewer"
 
 SCREEN_W, SCREEN_H = 1620, 2160
-BG = (254, 250, 245)  # matches plush_memory's HTML body background #fefaf5
+BG = (255, 255, 255)  # pure white — e-ink only, not the HTML display's #fefaf5
+                       # (plush_memory_camera.html is untouched by this file).
+                       # Keeping this the same white the binarized reveal
+                       # phase maps its background to avoids a visible
+                       # white-to-cream jump when the color stage lands.
 
 # "dither": scattered (Bayer) reveal order — more natural-looking materialize.
 # "raster": top-left to bottom-right, like a scan — simpler, more mechanical.
@@ -52,7 +69,23 @@ MIN_TILE_PX = 8        # floor, so a narrow image doesn't get degenerate tiles
 TILE_HOLD_MS = 45      # delay between tiles — more time for the panel's
                        # gray levels to actually settle before the next
                        # partial update, not just a pacing choice
-FINAL_HOLD_MS = 450    # pause on the finished picture before moving on
+FINAL_HOLD_MS = 450    # pause on the finished (still black/white) picture
+                       # before the color stage replaces it
+BW_THRESHOLD = 140     # luminance cutoff for the reveal's binarization —
+                       # BG's ~250 average comfortably maps to white, ink/
+                       # color areas below this map to black
+
+# "band": full-height (or full-width) strips swept left-to-right (or
+# top-to-bottom) — smooth, like a single continuous wipe, no jumping
+# between disconnected regions. This is the one that actually looked good.
+# "tile": square-tile dissolve (see _slice_tiles) — kept as a second option.
+REVEAL_STYLE = "band"
+BAND_COUNT = 20        # number of strips — tile size scales with the image,
+                       # same reasoning as TILE_COLUMNS
+BAND_DIRECTION = "ltr"  # "ltr": vertical strips, left to right.
+                        # "ttb": horizontal strips, top to bottom.
+BAND_HOLD_MS = 60      # delay between bands — fewer, bigger updates than
+                       # tiles, so each one can afford more settle time
 
 
 def _tight_bbox(img, alpha_threshold=16):
@@ -97,21 +130,34 @@ BAYER4 = (
 )
 
 
-def _make_tiles(image_path, out_dir, target_w):
-    """Crop/flatten/resize the source image, then slice it into a fixed
-    TILE_COLUMNS grid (tile size scales with the image, so a bigger image
-    doesn't balloon into far more tiles / a much longer reveal). Tiles are
-    returned in dissolve (Bayer-dithered) order rather than raster order —
-    see BAYER4 above. Returns (tiles, w, h) where each tile is (rel_x,
-    rel_y, tile_w, tile_h, fname), relative to the image's own top-left
-    corner."""
+def _prepare_image(image_path, target_w):
+    """Crop/flatten/resize the source image. Returns (img, target_w,
+    target_h) — img is the real color image, still at full quality; callers
+    decide separately whether to binarize it (see _binarize)."""
     raw = Image.open(image_path)
     raw = raw.crop(_tight_bbox(raw))  # drop the fully-transparent margin
     img = _flatten_onto_bg(raw, BG)
     scale = target_w / img.width
     target_h = round(img.height * scale)
-    img = img.resize((target_w, target_h), Image.LANCZOS)
+    return img.resize((target_w, target_h), Image.LANCZOS), target_w, target_h
 
+
+def _binarize(img, threshold=BW_THRESHOLD):
+    """Pure black/white version of img — see the module docstring for why
+    the tile-by-tile reveal always uses this instead of the real colors."""
+    gray = img.convert("L")
+    bw = gray.point(lambda p: 255 if p > threshold else 0)
+    return bw.convert("RGB")
+
+
+def _slice_tiles(img, out_dir, prefix=""):
+    """Slice img into a fixed TILE_COLUMNS grid (tile size scales with the
+    image, so a bigger image doesn't balloon into far more tiles / a much
+    longer reveal). Returns tiles in dissolve (Bayer-dithered) order rather
+    than raster order — see BAYER4 above — unless REVEAL_ORDER is "raster".
+    Each tile is (rel_x, rel_y, tile_w, tile_h, fname), relative to img's
+    own top-left corner."""
+    target_w, target_h = img.size
     tile_px = max(MIN_TILE_PX, round(target_w / TILE_COLUMNS))
 
     tiles = []
@@ -121,7 +167,7 @@ def _make_tiles(image_path, out_dir, target_w):
         col = 0
         for left in range(0, target_w, tile_px):
             tile_w = min(tile_px, target_w - left)
-            fname = f"tile_{row}_{col}.png"
+            fname = f"{prefix}tile_{row}_{col}.png"
             img.crop((left, top, left + tile_w, top + tile_h)).save(os.path.join(out_dir, fname))
             dither = BAYER4[row % 4][col % 4]
             tiles.append((dither, left, top, tile_w, tile_h, fname))
@@ -132,18 +178,47 @@ def _make_tiles(image_path, out_dir, target_w):
         tiles.sort(key=lambda t: (t[2], t[1]))      # top, then left
     else:
         tiles.sort(key=lambda t: (t[0], t[2], t[1]))  # dither value, then top/left for stable ties
-    tiles = [t[1:] for t in tiles]
-    return tiles, target_w, target_h
+    return [t[1:] for t in tiles]
+
+
+def _slice_bands(img, out_dir):
+    """Slice img into BAND_COUNT full-height (or full-width) strips, in a
+    single sweep (left-to-right or top-to-bottom per BAND_DIRECTION) rather
+    than a scattered dissolve — a smooth continuous wipe instead of tiles
+    popping in all over. Each band is (rel_x, rel_y, w, h, fname), relative
+    to img's own top-left corner."""
+    w, h = img.size
+    bands = []
+    if BAND_DIRECTION == "ttb":
+        band_px = max(MIN_TILE_PX, round(h / BAND_COUNT))
+        i = 0
+        for top in range(0, h, band_px):
+            band_h = min(band_px, h - top)
+            fname = f"band_{i}.png"
+            img.crop((0, top, w, top + band_h)).save(os.path.join(out_dir, fname))
+            bands.append((0, top, w, band_h, fname))
+            i += 1
+    else:
+        band_px = max(MIN_TILE_PX, round(w / BAND_COUNT))
+        i = 0
+        for left in range(0, w, band_px):
+            band_w = min(band_px, w - left)
+            fname = f"band_{i}.png"
+            img.crop((left, 0, left + band_w, h)).save(os.path.join(out_dir, fname))
+            bands.append((left, 0, band_w, h, fname))
+            i += 1
+    return bands
 
 
 def push_memory(image_path, cx, cy, target_w=360, event_id=None,
                  clear_first=False, settle_after=False, host=EINK_HOST):
-    """Composite `image_path`, slice it into small tiles, and push a reveal
-    sequence (top-left to bottom-right, one tiny partial refresh per tile)
-    centered at (cx, cy) to the tablet over SSH. The refreshed region is the
-    tight bounding box of the subject itself (post-crop), not a full
-    target_w square, so the panel only repaints where something actually
-    appears.
+    """Composite `image_path` and push a two-phase reveal to the tablet over
+    SSH, centered at (cx, cy): first a binarized (pure black/white) version
+    tile by tile — see the module docstring for why — then, in one final
+    stage, the real color image over the whole area at once. The refreshed
+    region is the tight bounding box of the subject itself (post-crop), not
+    a full target_w square, so the panel only repaints where something
+    actually appears.
 
     `clear_first` asks the viewer to blank the panel to background and flash
     before this event's tiles — pass it only for the first image of a touch
@@ -152,24 +227,42 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
     per touch instead of once per image.
 
     `settle_after` asks the viewer for one more flash once this event's
-    tiles are all drawn — no blanking this time, just re-driving the
-    now-complete picture with a full-quality waveform so it settles crisp
-    instead of staying at whatever partially-settled gray level the UFAST
-    tile-by-tile reveal left it at. Pass it for a touch's last image
-    (eink_hook's append_latest() sets this).
+    color stage is drawn — re-driving it with a full-quality waveform so it
+    settles crisp instead of staying at whatever the tile-by-tile reveal
+    left it at. Pass it for a touch's last image (eink_hook's
+    append_latest() sets this).
 
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
 
     with tempfile.TemporaryDirectory() as tmp:
-        tiles, w, h = _make_tiles(image_path, tmp, target_w)
+        color_img, w, h = _prepare_image(image_path, target_w)
+        bw_img = _binarize(color_img)
+        if REVEAL_STYLE == "band":
+            reveal = _slice_bands(bw_img, tmp)
+            reveal_hold_ms = BAND_HOLD_MS
+        else:
+            reveal = _slice_tiles(bw_img, tmp, prefix="bw_")
+            reveal_hold_ms = TILE_HOLD_MS
         ox, oy = round(cx - w / 2), round(cy - h / 2)
         stages = [
-            {"x": ox + left, "y": oy + top, "image": fname, "hold_ms": TILE_HOLD_MS}
-            for left, top, tw, th, fname in tiles
+            {"x": ox + left, "y": oy + top, "image": fname, "hold_ms": reveal_hold_ms}
+            for left, top, tw, th, fname in reveal
         ]
         stages[-1]["hold_ms"] = FINAL_HOLD_MS
-        manifest = {"clear_first": clear_first, "settle_after": settle_after, "stages": stages}
+
+        color_fname = "color_final.png"
+        color_img.save(os.path.join(tmp, color_fname))
+        stages.append({"x": ox, "y": oy, "image": color_fname, "hold_ms": FINAL_HOLD_MS})
+
+        manifest = {
+            "clear_first": clear_first,
+            "settle_after": settle_after,
+            "bg": list(BG),  # single source of truth for the fill color a
+                             # clear_first flash reveals — the viewer no
+                             # longer hardcodes its own copy of this
+            "stages": stages,
+        }
         manifest_path = os.path.join(tmp, "manifest.json")
         with open(manifest_path, "w") as f:
             json.dump(manifest, f)
@@ -180,7 +273,8 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
             [
                 "scp",
                 "-q",
-                *[os.path.join(tmp, fname) for *_, fname in tiles],
+                *[os.path.join(tmp, fname) for *_, fname in reveal],
+                os.path.join(tmp, color_fname),
                 manifest_path,
                 f"root@{host}:{remote_dir}/",
             ],
