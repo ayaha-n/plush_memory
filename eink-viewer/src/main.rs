@@ -14,14 +14,17 @@
 //! kind of "soft ink appearing without a full-panel flash" effect; we reuse
 //! it rather than re-deriving the wire protocol.
 
+mod ink;
 mod qtfb;
+mod script;
 
+use ab_glyph::FontRef;
 use qtfb::{QtfbClient, FBFMT_RMPP_RGB565, REFRESH_MODE_UFAST};
 use serde::Deserialize;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SCREEN_W: usize = 1620;
 const SCREEN_H: usize = 2160;
@@ -42,15 +45,44 @@ struct Manifest {
     stages: Vec<Stage>,
 }
 
+/// One step of an event. Untagged: a stage with `image` blits a PNG frame;
+/// one with `text` writes the sentence by hand into a box `w` wide at (x, y).
+/// A text stage without `y` continues below the previous text stage, `gap`
+/// glyph heights further down, so the PC side never has to guess how many
+/// lines the wrapping produced.
 #[derive(Deserialize)]
-struct Stage {
-    x: i32,
-    y: i32,
-    image: String,
-    hold_ms: u64,
+#[serde(untagged)]
+enum Stage {
+    Image {
+        x: i32,
+        y: i32,
+        image: String,
+        hold_ms: u64,
+    },
+    Text {
+        x: i32,
+        #[serde(default)]
+        y: Option<i32>,
+        #[serde(default)]
+        gap: f32,
+        w: i32,
+        text: String,
+        px: f32,
+        #[serde(default)]
+        hold_ms: u64,
+    },
+    /// Internal: Job queues this after the last stage when settle_after.
+    #[serde(skip)]
+    Settle,
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--preview") {
+        preview(&args[2..]);
+        return;
+    }
+
     let key: i32 = std::env::var("QTFB_KEY")
         .expect("QTFB_KEY not set — this app must be launched by AppLoad in windowed mode")
         .parse()
@@ -71,6 +103,15 @@ fn main() {
     fs::create_dir_all(&events_dir).expect("failed to create events dir");
     eprintln!("plush_memory_viewer: watching {}", events_dir.display());
 
+    let font = FontRef::try_from_slice(ink::FONT_TTF).expect("bundled font");
+    let mut jobs: Vec<Job> = Vec::new();
+    let mut last_poll = Instant::now() - POLL_INTERVAL;
+
+    // Events run concurrently, not one after another: each READY event
+    // becomes a Job, and every pass advances whichever jobs are due by one
+    // step (one image stage, or one small batch of pen points). So a touch's
+    // handwriting keeps going while its pictures arrive and reveal, instead
+    // of waiting its turn behind them.
     loop {
         // Drain input/window events; an Err means AppLoad closed our window.
         if client.drain_events().is_err() {
@@ -78,14 +119,39 @@ fn main() {
             break;
         }
 
-        if let Some(event_path) = next_ready_event(&events_dir) {
-            if let Err(e) = process_event(&mut client, &event_path) {
-                eprintln!("plush_memory_viewer: event {:?} failed: {e}", event_path);
+        if last_poll.elapsed() >= POLL_INTERVAL {
+            last_poll = Instant::now();
+            for dir in ready_events(&events_dir) {
+                if jobs.iter().any(|j| j.dir == dir) {
+                    continue;
+                }
+                match Job::start(&mut client, dir.clone()) {
+                    Ok(job) => jobs.push(job),
+                    Err(e) => {
+                        eprintln!("plush_memory_viewer: event {:?} failed: {e}", dir);
+                        let _ = fs::remove_dir_all(&dir);
+                    }
+                }
             }
-            let _ = fs::remove_dir_all(&event_path);
         }
 
-        std::thread::sleep(POLL_INTERVAL);
+        let now = Instant::now();
+        for job in jobs.iter_mut().filter(|j| j.next_at <= now) {
+            if let Err(e) = job.step(&mut client, &font) {
+                eprintln!("plush_memory_viewer: event {:?} failed: {e}", job.dir);
+                job.finished = true;
+            }
+        }
+        jobs.retain(|j| {
+            if j.finished {
+                let _ = fs::remove_dir_all(&j.dir);
+            }
+            !j.finished
+        });
+
+        let wake = jobs.iter().map(|j| j.next_at).min().unwrap_or(now + POLL_INTERVAL);
+        let wait = wake.saturating_duration_since(Instant::now()).min(POLL_INTERVAL);
+        std::thread::sleep(wait.max(Duration::from_millis(1)));
     }
 }
 
@@ -96,67 +162,124 @@ fn events_dir_path() -> PathBuf {
     exe.parent().expect("exe has no parent dir").join("events")
 }
 
-/// An event dir is only picked up once a `READY` sentinel file exists in it,
-/// so we never read a manifest the PC side is still scp-ing. Oldest first
-/// (sorted by directory name — the PC side uses zero-padded timestamps).
-fn next_ready_event(events_dir: &Path) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = fs::read_dir(events_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p.join("READY").is_file())
-        .collect();
+/// Event dirs are only picked up once a `READY` sentinel file exists in
+/// them, so we never read a manifest the PC side is still scp-ing.
+fn ready_events(events_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = match fs::read_dir(events_dir) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && p.join("READY").is_file())
+            .collect(),
+        Err(_) => Vec::new(),
+    };
     dirs.sort();
-    dirs.into_iter().next()
+    dirs
 }
 
-fn process_event(client: &mut QtfbClient, event_dir: &Path) -> io::Result<()> {
-    let manifest_bytes = fs::read(event_dir.join("manifest.json"))?;
-    let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+/// One event in progress. `step` does one unit of work and says (via
+/// `next_at`) when the next one is due, so several jobs can interleave.
+struct Job {
+    dir: PathBuf,
+    stages: std::collections::VecDeque<Stage>,
+    writer: Option<(ink::Writer, u64)>, // a text stage mid-write, + its hold_ms
+    text_bottom: i32,
+    settle_after: bool,
+    settled: bool,
+    next_at: Instant,
+    finished: bool,
+}
 
-    // One full-panel flash per *touch*, not per image event: dozens of tiny
-    // UFAST partial updates in a row (the tile reveal below) leave faint
-    // random-looking ghosting from un-settled gray levels, since nothing
-    // ever resets the panel's electronic state. A touch can push many image
-    // events (the SHOW_IMAGE batch, then TMP_IMAGE/APPEND_IMAGE), so only
-    // the first one sets clear_first — see eink_hook.py's show(). Matches
-    // the HTML display's own reset point: it empties image-container on
-    // SHOW_IMAGE too, not on every individual image.
-    //
-    // Fill to background, then one ordinary whole-panel UFAST update (not
-    // request_full_refresh()) — same reasoning as the color settle stage
-    // below: a single update settles cleanly on its own, it's only a long
-    // run of sequential updates that ghosts. That means no GC16-style
-    // flash/invert here either, and no need to wait out a flash before the
-    // reveal starts.
-    if manifest.clear_first {
-        let (r, g, b) = manifest.bg.map(|c| (c[0], c[1], c[2])).unwrap_or(DEFAULT_BG_RGB);
-        fill_bg(client.framebuffer(), (r, g, b));
-        let _ = client.update_all();
+impl Job {
+    fn start(client: &mut QtfbClient, dir: PathBuf) -> io::Result<Job> {
+        let manifest_bytes = fs::read(dir.join("manifest.json"))?;
+        let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        // One full-panel flash per *touch*, not per image event: dozens of tiny
+        // UFAST partial updates in a row (the tile reveal below) leave faint
+        // random-looking ghosting from un-settled gray levels, since nothing
+        // ever resets the panel's electronic state. A touch can push many image
+        // events (the SHOW_IMAGE batch, then TMP_IMAGE/APPEND_IMAGE), so only
+        // the first one sets clear_first — see eink_hook.py's show(). Matches
+        // the HTML display's own reset point: it empties image-container on
+        // SHOW_IMAGE too, not on every individual image.
+        //
+        // Fill to background, then one ordinary whole-panel UFAST update (not
+        // request_full_refresh()) — same reasoning as the color settle stage
+        // below: a single update settles cleanly on its own, it's only a long
+        // run of sequential updates that ghosts. That means no GC16-style
+        // flash/invert here either, and no need to wait out a flash before the
+        // reveal starts.
+        if manifest.clear_first {
+            let (r, g, b) = manifest.bg.map(|c| (c[0], c[1], c[2])).unwrap_or(DEFAULT_BG_RGB);
+            fill_bg(client.framebuffer(), (r, g, b));
+            let _ = client.update_all();
+        }
+
+        Ok(Job {
+            dir,
+            stages: manifest.stages.into(),
+            writer: None,
+            text_bottom: 0,
+            settle_after: manifest.settle_after,
+            settled: false,
+            next_at: Instant::now(),
+            finished: false,
+        })
     }
 
-    for stage in manifest.stages {
-        let (w, h, rgb) = decode_png_rgb8(&event_dir.join(&stage.image))?;
-        blit_rgb8(client.framebuffer(), stage.x, stage.y, w, h, &rgb);
-        let _ = client.update_partial(stage.x, stage.y, w as i32, h as i32);
-        std::thread::sleep(Duration::from_millis(stage.hold_ms));
-    }
+    fn step(&mut self, client: &mut QtfbClient, font: &FontRef) -> io::Result<()> {
+        let now = Instant::now();
+        if let Some((writer, hold_ms)) = &mut self.writer {
+            let dirty = writer.step(client.framebuffer(), SCREEN_W, SCREEN_H);
+            if let Some((dx, dy, dw, dh)) = dirty.rect(SCREEN_W, SCREEN_H) {
+                let _ = client.update_partial(dx, dy, dw, dh);
+            }
+            if writer.done() {
+                self.next_at = now + Duration::from_millis(*hold_ms);
+                self.writer = None;
+            } else {
+                self.next_at = now + Duration::from_millis(ink::STEP_MS);
+            }
+            return Ok(());
+        }
 
-    // This touch's last image: the UFAST tile-by-tile reveal above leaves
-    // the picture at whatever partially-settled gray level each tile's
-    // waveform reached, not a clean one. No fill_bg here — unlike
-    // clear_first this must not blank what was just drawn, only re-drive it
-    // with a full-quality waveform so it settles crisp.
-    if manifest.settle_after {
-        // A beat after the last tile lands (on top of its own hold_ms)
-        // before the settle flash, so the finished picture reads as a
-        // distinct "done" moment rather than the flash feeling glued to
-        // the last tile's reveal.
-        std::thread::sleep(Duration::from_millis(600));
-        let _ = client.request_full_refresh();
+        match self.stages.pop_front() {
+            Some(Stage::Image { x, y, image, hold_ms }) => {
+                let (w, h, rgb) = decode_png_rgb8(&self.dir.join(&image))?;
+                blit_rgb8(client.framebuffer(), x, y, w, h, &rgb);
+                let _ = client.update_partial(x, y, w as i32, h as i32);
+                self.next_at = now + Duration::from_millis(hold_ms);
+            }
+            Some(Stage::Text { x, y, gap, w, text, px, hold_ms }) => {
+                let y = y.unwrap_or(self.text_bottom + (gap * px) as i32);
+                let (strokes, bottom) = ink::plan(font, &text, x, y, w, px);
+                self.text_bottom = bottom;
+                self.writer = Some((ink::Writer::new(strokes), hold_ms));
+                self.next_at = now;
+            }
+            None if self.settle_after && !self.settled => {
+                // This touch's last image: the UFAST tile-by-tile reveal above leaves
+            // the picture at whatever partially-settled gray level each tile's
+            // waveform reached, not a clean one. No fill_bg here — unlike
+            // clear_first this must not blank what was just drawn, only re-drive it
+            // with a full-quality waveform so it settles crisp.
+                // A beat after the last stage lands before the settle
+                // flash, so the finished picture reads as a distinct "done"
+                // moment rather than the flash feeling glued to it.
+                self.settled = true;
+                self.next_at = now + Duration::from_millis(600);
+                self.stages.push_back(Stage::Settle);
+            }
+            Some(Stage::Settle) => {
+                let _ = client.request_full_refresh();
+                self.finished = true;
+            }
+            None => self.finished = true,
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// Decode a PNG to a flat RGB8 buffer, normalizing whatever color type/bit
@@ -241,4 +364,69 @@ fn blit_rgb8(fb: &mut [u8], x: i32, y: i32, w: usize, h: usize, rgb: &[u8]) {
             fb[dest..dest + 2].copy_from_slice(&px565.to_le_bytes());
         }
     }
+}
+
+/// `plush_memory_viewer --preview OUT_PREFIX PX W TEXT...` — off-device check
+/// of a text stage: writes TEXT (one paragraph per argument) into a box W
+/// wide on a blank panel-sized buffer and saves PNG snapshots at 1/3, 2/3
+/// and the end of the writing (OUT_PREFIX_1.png ... _3.png) plus the step
+/// count, so layout and pacing can be judged without the tablet.
+fn preview(args: &[String]) {
+    let usage = "usage: --preview OUT_PREFIX PX W TEXT...";
+    let out = args.first().expect(usage);
+    let px: f32 = args.get(1).expect(usage).parse().expect(usage);
+    let w: i32 = args.get(2).expect(usage).parse().expect(usage);
+    // PREVIEW_FONT=path.ttf tries another font without rebuilding.
+    let other = std::env::var("PREVIEW_FONT").ok().map(|p| fs::read(p).expect("read PREVIEW_FONT"));
+    let font = FontRef::try_from_slice(other.as_deref().unwrap_or(ink::FONT_TTF)).expect("font");
+
+    let margin = (SCREEN_W as i32 - w) / 2;
+    let mut y = 160;
+    let mut strokes = Vec::new();
+    for para in &args[3..] {
+        let (s, next_y) = ink::plan(&font, para, margin, y, w, px);
+        strokes.extend(s);
+        y = next_y + (px * 0.6) as i32;
+    }
+
+    let mut fb = vec![0xffu8; SCREEN_W * SCREEN_H * 2];
+    let mut steps = 0;
+    {
+        let mut counter = ink::Writer::new(strokes.clone());
+        let mut scratch = fb.clone();
+        while !counter.done() {
+            counter.step(&mut scratch, SCREEN_W, SCREEN_H);
+            steps += 1;
+        }
+    }
+    let mut writer = ink::Writer::new(strokes);
+    let mut i = 0;
+    let mut shot = 1;
+    while !writer.done() {
+        writer.step(&mut fb, SCREEN_W, SCREEN_H);
+        i += 1;
+        if i == steps / 3 || i == 2 * steps / 3 || writer.done() {
+            save_png_rgb565(&fb, &format!("{out}_{shot}.png"));
+            shot += 1;
+        }
+    }
+    println!(
+        "steps={steps} (~{:.1}s at {}ms/step, before panel latency)",
+        steps as f64 * ink::STEP_MS as f64 / 1000.0,
+        ink::STEP_MS
+    );
+}
+
+fn save_png_rgb565(fb: &[u8], path: &str) {
+    let mut rgb = Vec::with_capacity(SCREEN_W * SCREEN_H * 3);
+    for px in fb.chunks_exact(2) {
+        let v = u16::from_le_bytes([px[0], px[1]]);
+        let (r, g, b) = ((v >> 11) as u8, ((v >> 5) & 0x3f) as u8, (v & 0x1f) as u8);
+        rgb.extend_from_slice(&[(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)]);
+    }
+    let file = fs::File::create(path).expect("create preview png");
+    let mut enc = png::Encoder::new(io::BufWriter::new(file), SCREEN_W as u32, SCREEN_H as u32);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(&rgb).unwrap();
 }

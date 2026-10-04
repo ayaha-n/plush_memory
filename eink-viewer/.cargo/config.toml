@@ -1,0 +1,5 @@
+# Cross-build for the Paper Pro with rustup's self-contained musl target, so
+# no aarch64 gcc is needed: `cargo build --release --target aarch64-unknown-linux-musl`
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]
