@@ -1,0 +1,166 @@
+{
+  "_touch_line": {
+    "ja": [
+      "{year}ねん {month}がつ {day_ja}、あなたの てが {part_ja}に ふれました。",
+      "この てざわりも、きっと わすれません。"
+    ],
+    "en": [
+      "On {month_en} {day}, {year}, your hand touched its {part_en}.",
+      "It will never forget this touch, either."
+    ],
+    "parts": {
+      "head": [
+        "あたま",
+        "head"
+      ],
+      "stomach": [
+        "おなか",
+        "tummy"
+      ],
+      "larm": [
+        "ひだりて",
+        "left paw"
+      ],
+      "rarm": [
+        "みぎて",
+        "right paw"
+      ],
+      "lleg": [
+        "ひだりあし",
+        "left leg"
+      ],
+      "rleg": [
+        "みぎあし",
+        "right leg"
+      ]
+    }
+  },
+  "head": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども あたまを なでられてきました。",
+      "en": "This plush has had its head stroked many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "ねむる まえに、よく なでられていました。",
+        "en": "It was often stroked just before falling asleep."
+      },
+      {
+        "ja": "おでこを くっつけて、ないしょの はなしを きいた ことも あります。",
+        "en": "Once, with foreheads pressed together, it heard a secret."
+      },
+      {
+        "ja": "ほめられた こが、うれしくて なでてくれた ひも ありました。",
+        "en": "One day a child who'd been praised stroked it, too, out of joy."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、てっぺんの けは すこし ねています。",
+      "en": "That's why the fur on top lies a little flat."
+    }
+  },
+  "stomach": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども おなかを ぎゅっと だきしめられてきました。",
+      "en": "This plush has had its tummy hugged tight many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "まくらの かわりに なった ひも ありました。",
+        "en": "There were days it served as a pillow."
+      },
+      {
+        "ja": "ないている こ の なみだを、だまって うけとめた ことも あります。",
+        "en": "Once, it quietly caught the tears of a crying child."
+      },
+      {
+        "ja": "かみなりの よる、ふとんの なかで ずっと だきしめられて いました。",
+        "en": "On a stormy night, it was held tight under the covers until morning."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、おなかは すっかり やわらかく なっています。",
+      "en": "That's why its tummy has grown so soft."
+    }
+  },
+  "larm": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども ひだりてを にぎられてきました。",
+      "en": "This plush has had its left paw held many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "はじめての みちを、てを つないで あるいた ことが あります。",
+        "en": "Once, it walked a road for the first time, paw in hand."
+      },
+      {
+        "ja": "びょういんの まちあいしつで、ずっと にぎられて いた ひも ありました。",
+        "en": "One day it was held the whole time in a hospital waiting room."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、ひだりての けなみは くたくたに なっています。",
+      "en": "That's why the fur on the left paw has worn soft and limp."
+    }
+  },
+  "rarm": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども みぎてを にぎられてきました。",
+      "en": "This plush has had its right paw held many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "みぎてを ふって、さようならの あいさつを した ことが あります。",
+        "en": "Once, it waved goodbye with this right paw."
+      },
+      {
+        "ja": "あくしゅを して、ともだちに なった ひも ありました。",
+        "en": "There was also a day it shook paws and made a friend."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、みぎての さきは すこし のびています。",
+      "en": "That's why the tip of the right paw is a little stretched."
+    }
+  },
+  "lleg": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども ひだりあしを さわられてきました。",
+      "en": "This plush has had its left leg touched many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "かばんから ひだりあしを はみだして、たびを した ことが あります。",
+        "en": "Once, it went on a trip with its left leg sticking out of a bag."
+      },
+      {
+        "ja": "ひざの うえで、ひだりあしを ぽんぽんと された ひも ありました。",
+        "en": "There were days its left leg was patted on someone's lap."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、ひだりあしの うらは すこし すりきれています。",
+      "en": "That's why the sole of the left foot is a little worn."
+    }
+  },
+  "rleg": {
+    "opening": {
+      "ja": "この ぬいぐるみは、なんども みぎあしを さわられてきました。",
+      "en": "This plush has had its right leg touched many, many times."
+    },
+    "episodes": [
+      {
+        "ja": "ひざの うえで、みぎあしを なんども ぽんぽんと されました。",
+        "en": "Its right leg was patted, again and again, on someone's lap."
+      },
+      {
+        "ja": "うみに いった ひ、みぎあしに すなを つけて かえってきました。",
+        "en": "After a day at the sea, it came home with sand on its right foot."
+      }
+    ],
+    "evidence": {
+      "ja": "その しるしに、みぎあしの けは くたくたに なっています。",
+      "en": "That's why the fur on the right leg has worn soft and limp."
+    }
+  }
+}

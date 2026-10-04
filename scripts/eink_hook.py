@@ -6,52 +6,78 @@ This is purely additive: every entry point here is fire-and-forget
 WebSocket/HTML path (touch_image_camera_new.py + plush_memory_camera.html)
 behaves exactly as before whether or not the tablet is reachable.
 
-The position layout mirrors plush_memory_camera.html's `positions8` /
-`position_latest` tables (percent-of-viewport, image anchored at its center),
-reinterpreted against the Paper Pro panel's native 1620x2160 resolution
-instead of a landscape monitor. There is no rotation here (unlike the HTML's
+Unlike the HTML's freely overlapping collage, images here go into fixed,
+non-overlapping slots (see SLOTS) on the Paper Pro panel's native
+1620x2160 resolution. There is no rotation here either (unlike the HTML's
 random `rotate(...)`) — the e-ink viewer only does axis-aligned partial
 updates, so stages stay unrotated rectangles. Likewise HIDE_IMAGE /
 HIDE_IMAGE_ALL are intentionally not mirrored: e-ink doesn't flicker, so a
 retired memory is simply left on the panel until the next one overwrites
 that spot — more "diary page" than "disappearing toast", and one less thing
 to keep in sync with the HTML's fade-out timing.
+
+Unlike the HTML, the e-ink page is laid out like a picture book: the
+illustrations fill the upper part of the panel, and the bottom is a text
+area where the viewer writes, by hand, the touched part's memory (right
+after the touch's first image) and then a line recording this touch itself (right after the newly generated "latest" image) — see
+memory_text.py.
 """
 import asyncio
 import os
 import random
+import time
 
 import rospy
 
 import eink_memory_push
+import memory_text
 
 ENABLED = True
 
 SCREEN_W, SCREEN_H = 1620, 2160
 
-# plush_memory_camera.html's `positions8` (top%, left%), unchanged.
-POSITIONS8 = [
-    (0.25, 0.10),
-    (0.18, 0.85),
-    (0.32, 0.41),
-    (0.52, 0.18),
-    (0.58, 0.70),
-    (0.70, 0.10),
-    (0.74, 0.42),
-    (0.72, 0.87),
-]
-# html's `position_latest`.
-POSITION_LATEST = (0.47, 0.50)
-# html's TMP_TOP_MIN/MAX, TMP_LEFT_MIN/MAX (fractions instead of percent).
-TMP_TOP_RANGE = (0.15, 0.75)
-TMP_LEFT_RANGE = (0.10, 0.90)
 
-# html: wrapper width 22vw * JS scale (0.45-0.6 random) for a normal image,
-# 28vw * fixed 0.7 for the latest one. We don't replicate the random JS
-# scale — just its rough midpoint — since the materialize-frame approach
-# already needs a single fixed size per call.
-NORMAL_WIDTH_PX = round(0.22 * SCREEN_W * 0.5)  # ~178px
-LATEST_WIDTH_PX = round(0.28 * SCREEN_W * 0.7)  # ~317px
+# Picture area (y 20-1420), above the text. The latest image gets the
+# middle; around it, SLOTS are SLOT_PX boxes laid out so none of them
+# overlap each other or the latest one: four down each side, plus one above
+# and one below the middle. Images are fit inside their box (width and
+# height), so even a tall cutout stays in its slot.
+SLOT_PX = 320
+LATEST_PX = 520
+LATEST_CENTER = (810, 720)
+SLOTS = (
+    [(185, y) for y in (180, 540, 900, 1260)]
+    + [(1435, y) for y in (180, 540, 900, 1260)]
+    + [(810, 180), (810, 1260)]
+)
+
+# Picture-book text area, below the pictures. Two fixed slots at
+# eink_memory_push.TEXT_PX: the memory (three sentences), then this
+# touch's closing lines (two). TEXT_W is wide enough that every sentence
+# in data/memory_texts.json, ja and en, fits on one line.
+# Each slot is blanked just before it's written, so the previous touch's
+# text never shows through when CLEAR_BEFORE_TOUCH is off.
+TEXT_X, TEXT_W = 70, 1480
+MEMORY_TEXT_Y = 1480
+TOUCH_LINE_Y = 1850
+_MEMORY_SLOT = (TEXT_X - 20, MEMORY_TEXT_Y - 20, TEXT_W + 40, TOUCH_LINE_Y - MEMORY_TEXT_Y - 10)
+_TOUCH_SLOT = (TEXT_X - 20, TOUCH_LINE_Y - 20, TEXT_W + 40, SCREEN_H - TOUCH_LINE_Y)
+
+# Slots not yet used on the current page, in the order they'll be handed
+# out. show() starts a fresh page; when they run out (many TMP_IMAGEs during
+# a slow generation), the slots are reused — each push blanks its box first.
+_free_slots = []
+
+
+def _next_slot():
+    if not _free_slots:
+        _free_slots.extend(random.sample(SLOTS, len(SLOTS)))
+    return _free_slots.pop(0)
+
+
+def _box(center, size):
+    cx, cy = center
+    return (cx - size // 2, cy - size // 2, size, size)
 
 # html's `displaying_time`: stagger between images in a SHOW_IMAGE batch.
 STAGGER_SEC = 2.0
@@ -89,38 +115,60 @@ def _image_path(kind: str, img_id):
     return None
 
 
-async def _push(kind: str, img_id, top_frac: float, left_frac: float, width_px: int,
+async def _push(kind: str, img_id, center, size: int,
                  event_id: str, clear_first: bool = False, settle_after: bool = False):
     if not ENABLED:
         return
     path = _image_path(kind, img_id)
     if path is None:
         return
-    cx = left_frac * SCREEN_W
-    cy = top_frac * SCREEN_H
+    cx, cy = center
     loop = asyncio.get_event_loop()
     try:
-        # push_memory crops to the subject's own tight bounding box and
-        # centers that on (cx, cy) — it no longer assumes a square target_w
-        # region, since a cutout's post-crop aspect ratio isn't 1:1.
+        # push_memory crops to the subject's own tight bounding box, fits it
+        # in the size x size box and centers it on (cx, cy). The box is
+        # blanked first (unless the whole page just was), so a reused slot
+        # doesn't keep the edges of whatever image was there before.
         await loop.run_in_executor(
-            None, eink_memory_push.push_memory, path, cx, cy, width_px, event_id,
-            clear_first, settle_after,
-        )
+            None, lambda: eink_memory_push.push_memory(
+                path, cx, cy, size, event_id, clear_first, settle_after,
+                max_h=size, clear_rect=None if clear_first else _box(center, size)))
     except Exception as e:
         rospy.logwarn(f"eink_hook: push failed for {event_id}: {e}")
 
 
-async def _delayed_push(kind, img_id, top_frac, left_frac, width_px, delay_sec, event_id,
+async def _delayed_push(kind, img_id, center, size, delay_sec, event_id,
                          clear_first=False, settle_after=False):
     if delay_sec > 0:
         await asyncio.sleep(delay_sec)
-    await _push(kind, img_id, top_frac, left_frac, width_px, event_id, clear_first, settle_after)
+    await _push(kind, img_id, center, size, event_id, clear_first, settle_after)
+
+
+async def _push_text(paragraphs, y, slot, event_id):
+    if not ENABLED or not paragraphs:
+        return
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(
+            None, lambda: eink_memory_push.push_text(
+                paragraphs, TEXT_X, y, TEXT_W, event_id=event_id, clear_rect=slot))
+    except Exception as e:
+        rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
+
+
+async def _first_image_then_memory(kind, push_first):
+    """Write the part's memory once the touch's first image (and its
+    clear_first blank) has been handed to the viewer, so the blank can't
+    wipe the text. The viewer runs events one at a time, so the memory is
+    written while the rest of the batch is still on its way."""
+    await push_first
+    await _push_text(memory_text.memory_paragraphs(kind), MEMORY_TEXT_Y, _MEMORY_SLOT,
+                     f"text_memory_{kind}_{int(time.time() * 1000)}")
 
 
 def show(kind: str, selected_ids):
-    """Mirror a SHOW_IMAGE broadcast: stagger up to 8 ids onto POSITIONS8,
-    same 2s-apart pacing as the HTML. Only the very first image of this
+    """Mirror a SHOW_IMAGE broadcast: stagger up to 8 ids into free SLOTS
+    on a fresh page, same 2s-apart pacing as the HTML. Only the very first image of this
     touch asks the viewer for its one blank-and-flash (see push_memory's
     clear_first, gated by CLEAR_BEFORE_TOUCH) — a touch can end up pushing
     many images (this batch, plus later TMP_IMAGE/APPEND_IMAGE calls), and
@@ -137,25 +185,21 @@ def show(kind: str, selected_ids):
     already sitting elsewhere on screen."""
     if not ENABLED:
         return
-    positions = random.sample(POSITIONS8, min(len(selected_ids), len(POSITIONS8)))
-    for idx, img_id in enumerate(selected_ids[: len(positions)]):
-        top, left = positions[idx]
-        asyncio.create_task(
-            _delayed_push(
-                kind, img_id, top, left, NORMAL_WIDTH_PX,
-                idx * STAGGER_SEC, f"show_{kind}_{img_id}",
-                clear_first=(idx == 0 and eink_memory_push.CLEAR_BEFORE_TOUCH),
-            )
+    _free_slots[:] = random.sample(SLOTS, len(SLOTS))
+    for idx, img_id in enumerate(selected_ids[:8]):
+        push = _delayed_push(
+            kind, img_id, _next_slot(), SLOT_PX,
+            idx * STAGGER_SEC, f"show_{kind}_{img_id}",
+            clear_first=(idx == 0 and eink_memory_push.CLEAR_BEFORE_TOUCH),
         )
+        asyncio.create_task(_first_image_then_memory(kind, push) if idx == 0 else push)
 
 
 def tmp(kind: str, img_id):
-    """Mirror a TMP_IMAGE broadcast: one image at a random spot."""
+    """Mirror a TMP_IMAGE broadcast: one image in the next free slot."""
     if not ENABLED:
         return
-    top = random.uniform(*TMP_TOP_RANGE)
-    left = random.uniform(*TMP_LEFT_RANGE)
-    asyncio.create_task(_push(kind, img_id, top, left, NORMAL_WIDTH_PX, f"tmp_{kind}_{img_id}"))
+    asyncio.create_task(_push(kind, img_id, _next_slot(), SLOT_PX, f"tmp_{kind}_{img_id}"))
 
 
 def append_latest(kind: str, img_id):
@@ -166,5 +210,11 @@ def append_latest(kind: str, img_id):
     single reset point per touch."""
     if not ENABLED:
         return
-    top, left = POSITION_LATEST
-    asyncio.create_task(_push(kind, img_id, top, left, LATEST_WIDTH_PX, f"latest_{kind}_{img_id}"))
+    asyncio.create_task(_latest_then_touch_line(kind, img_id))
+
+
+async def _latest_then_touch_line(kind, img_id):
+    """The newest memory, then the line that records this touch under it."""
+    await _push(kind, img_id, LATEST_CENTER, LATEST_PX, f"latest_{kind}_{img_id}")
+    await _push_text(memory_text.touch_line(kind), TOUCH_LINE_Y, _TOUCH_SLOT,
+                     f"text_touch_{kind}_{int(time.time() * 1000)}")

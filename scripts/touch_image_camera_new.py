@@ -11,6 +11,7 @@ import time
 import random
 import draw_on_touch
 import eink_hook
+import memory_text
 
 PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
 
@@ -348,6 +349,10 @@ async def main():
     # images to the tablet.
     eink_hook.ENABLED = (display_target == "eink")
     rospy.loginfo(f"display_target = {display_target} (image_style = {IMAGE_STYLE}, eink_hook.ENABLED = {eink_hook.ENABLED})")
+
+    # Language of the picture-book text written on the e-ink page.
+    memory_text.LANG = rospy.get_param("~text_lang", "ja")
+    rospy.loginfo(f"text_lang = {memory_text.LANG}")
 
     for p in PARTS:                                                                                 
         rospy.Subscriber(f"/{p}_touch_trigger", Bool, make_callback(p))

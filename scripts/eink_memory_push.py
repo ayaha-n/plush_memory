@@ -87,6 +87,12 @@ BAND_DIRECTION = "ltr"  # "ltr": vertical strips, left to right.
 BAND_HOLD_MS = 60      # delay between bands — fewer, bigger updates than
                        # tiles, so each one can afford more settle time
 
+# Handwritten text (push_text). Glyph height in px; the pen width is fixed
+# in the viewer (ink.rs PEN_R).
+TEXT_PX = 56  # every sentence fits one line in eink_hook's TEXT_W at this size
+TEXT_PARAGRAPH_GAP = 0.6       # extra space between paragraphs, in glyph heights
+TEXT_PARAGRAPH_PAUSE_MS = 700  # beat between finishing one paragraph and starting the next
+
 
 def _tight_bbox(img, alpha_threshold=16):
     """Bounding box of the non-near-transparent pixels, so we only ever
@@ -130,16 +136,19 @@ BAYER4 = (
 )
 
 
-def _prepare_image(image_path, target_w):
-    """Crop/flatten/resize the source image. Returns (img, target_w,
-    target_h) — img is the real color image, still at full quality; callers
-    decide separately whether to binarize it (see _binarize)."""
+def _prepare_image(image_path, target_w, max_h=None):
+    """Crop/flatten/resize the source image to `target_w` wide — or less, if
+    that would make it taller than `max_h`. Returns (img, w, h) — img is the
+    real color image, still at full quality; callers decide separately
+    whether to binarize it (see _binarize)."""
     raw = Image.open(image_path)
     raw = raw.crop(_tight_bbox(raw))  # drop the fully-transparent margin
     img = _flatten_onto_bg(raw, BG)
     scale = target_w / img.width
-    target_h = round(img.height * scale)
-    return img.resize((target_w, target_h), Image.LANCZOS), target_w, target_h
+    if max_h is not None:
+        scale = min(scale, max_h / img.height)
+    w, h = round(img.width * scale), round(img.height * scale)
+    return img.resize((w, h), Image.LANCZOS), w, h
 
 
 def _binarize(img, threshold=BW_THRESHOLD):
@@ -211,7 +220,8 @@ def _slice_bands(img, out_dir):
 
 
 def push_memory(image_path, cx, cy, target_w=360, event_id=None,
-                 clear_first=False, settle_after=False, host=EINK_HOST):
+                 clear_first=False, settle_after=False, host=EINK_HOST,
+                 max_h=None, clear_rect=None):
     """Composite `image_path` and push a two-phase reveal to the tablet over
     SSH, centered at (cx, cy): first a binarized (pure black/white) version
     tile by tile — see the module docstring for why — then, in one final
@@ -232,11 +242,15 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
     left it at. Pass it for a touch's last image (eink_hook's
     append_latest() sets this).
 
+    `max_h` caps the height too, so the image fits a target_w x max_h box.
+    `clear_rect` (x, y, w, h) blanks that area to BG first, in one partial
+    update — for reusing a spot another image already occupies.
+
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
 
     with tempfile.TemporaryDirectory() as tmp:
-        color_img, w, h = _prepare_image(image_path, target_w)
+        color_img, w, h = _prepare_image(image_path, target_w, max_h)
         bw_img = _binarize(color_img)
         if REVEAL_STYLE == "band":
             reveal = _slice_bands(bw_img, tmp)
@@ -254,6 +268,13 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
         color_fname = "color_final.png"
         color_img.save(os.path.join(tmp, color_fname))
         stages.append({"x": ox, "y": oy, "image": color_fname, "hold_ms": FINAL_HOLD_MS})
+
+        extra = []
+        if clear_rect:
+            bx, by, bw, bh = clear_rect
+            Image.new("RGB", (bw, bh), BG).save(os.path.join(tmp, "blank.png"))
+            extra.append(os.path.join(tmp, "blank.png"))
+            stages.insert(0, {"x": bx, "y": by, "image": "blank.png", "hold_ms": 0})
 
         manifest = {
             "clear_first": clear_first,
@@ -275,6 +296,7 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
                 "-q",
                 *[os.path.join(tmp, fname) for *_, fname in reveal],
                 os.path.join(tmp, color_fname),
+                *extra,
                 manifest_path,
                 f"root@{host}:{remote_dir}/",
             ],
@@ -287,12 +309,54 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
     return event_id
 
 
+def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
+              clear_rect=None, host=EINK_HOST):
+    """Have the viewer write `paragraphs` by hand (stroke by stroke, the
+    riddle way — see eink-viewer/src/ink.rs) into a box `w` px wide whose
+    top-left is (x, y). The viewer stacks paragraphs with TEXT_PARAGRAPH_GAP
+    between them; the viewer word-wraps on spaces, so Japanese text should
+    be written with spaces between words (分かち書き). Only the text goes
+    over the wire — the strokes are traced on the tablet.
+
+    `clear_rect` (x, y, w, h) blanks that area to BG first, in one partial
+    update, so text left there by an earlier touch doesn't show through.
+
+    Returns the event id used."""
+    event_id = event_id or str(int(time.time() * 1000))
+    stages = [{"x": x, "w": w, "text": text, "px": px, "gap": TEXT_PARAGRAPH_GAP,
+               "hold_ms": TEXT_PARAGRAPH_PAUSE_MS} for text in paragraphs]
+    stages[0]["y"] = y  # later paragraphs continue below, laid out by the viewer
+    stages[-1]["hold_ms"] = 0
+    manifest = {"clear_first": clear_first, "bg": list(BG), "stages": stages}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        files = []
+        if clear_rect:
+            cx, cy, cw, ch = clear_rect
+            blank = os.path.join(tmp, "blank.png")
+            Image.new("RGB", (cw, ch), BG).save(blank)
+            files.append(blank)
+            stages.insert(0, {"x": cx, "y": cy, "image": "blank.png", "hold_ms": 0})
+        manifest_path = os.path.join(tmp, "manifest.json")
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, ensure_ascii=False)
+        remote_dir = f"{EINK_APP_DIR}/events/{event_id}"
+        subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"], check=True)
+        subprocess.run(["scp", "-q", *files, manifest_path, f"root@{host}:{remote_dir}/"], check=True)
+        subprocess.run(["ssh", f"root@{host}", f"touch {remote_dir}/READY"], check=True)
+    return event_id
+
+
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) != 4:
-        print(f"usage: {sys.argv[0]} <image.png> <center_x> <center_y>")
+    if len(sys.argv) >= 3 and sys.argv[1] == "--text":
+        eid = push_text(sys.argv[2:], x=160, y=1500, w=1300, clear_first=True)
+    elif len(sys.argv) == 4:
+        image_path, cx, cy = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+        eid = push_memory(image_path, cx, cy)
+    else:
+        print(f"usage: {sys.argv[0]} <image.png> <center_x> <center_y>\n"
+              f"       {sys.argv[0]} --text <paragraph> [<paragraph> ...]")
         sys.exit(1)
-    image_path, cx, cy = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-    eid = push_memory(image_path, cx, cy)
     print(f"pushed event {eid}")
