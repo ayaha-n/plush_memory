@@ -21,7 +21,12 @@ headers = {
 # Action prompts, style-agnostic — pass through prompt_for() to pick a style.
 hand_prompt = "Please draw this yellow bear shaking hands with this human character. The bear should be sitting and the human character should be smiling."
 
-leg_prompt = "Please draw this human character softly touching the right leg of this yellow bear. The bear should be sitting and the human character should be smiling."
+# The bear faces the viewer, so its own left leg is on the picture's right
+# side and vice versa — spell out both so the model doesn't mirror it.
+def leg_prompt(own_side, picture_side):
+    return (f"Please draw this human character softly touching the {own_side} leg of this yellow bear "
+            f"(the bear's own {own_side} leg, which appears on the {picture_side} side of the picture since the bear faces the viewer). "
+            "The bear should be sitting and the human character should be smiling.")
 
 prompts = {
     "hand": hand_prompt,
@@ -30,8 +35,8 @@ prompts = {
     "hug": "Please draw this yellow bear hugging with this human character.",
     "head": "Please draw this human character touching the head of this yellow bear. The bear should be sitting and the human character should be smiling.",
     "stomach": "Please draw this human character giving a soft pat to the belly of this yellow bear plush toy. The bear should be sitting and the human character should be smiling.",
-    "rleg": leg_prompt,
-    "lleg": leg_prompt,
+    "rleg": leg_prompt("right", "left"),
+    "lleg": leg_prompt("left", "right"),
 }
 
 # === スタイル定義 ===
