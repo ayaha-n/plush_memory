@@ -69,7 +69,7 @@ MIN_TILE_PX = 8        # floor, so a narrow image doesn't get degenerate tiles
 TILE_HOLD_MS = 45      # delay between tiles — more time for the panel's
                        # gray levels to actually settle before the next
                        # partial update, not just a pacing choice
-FINAL_HOLD_MS = 450    # pause on the finished (still black/white) picture
+FINAL_HOLD_MS = 800    # pause on the finished (still black/white) picture
                        # before the color stage replaces it
 BW_THRESHOLD = 140     # luminance cutoff for the reveal's binarization —
                        # BG's ~250 average comfortably maps to white, ink/
@@ -84,7 +84,7 @@ BAND_COUNT = 20        # number of strips — tile size scales with the image,
                        # same reasoning as TILE_COLUMNS
 BAND_DIRECTION = "ltr"  # "ltr": vertical strips, left to right.
                         # "ttb": horizontal strips, top to bottom.
-BAND_HOLD_MS = 60      # delay between bands — fewer, bigger updates than
+BAND_HOLD_MS = 150     # delay between bands — fewer, bigger updates than
                        # tiles, so each one can afford more settle time
 
 # Handwritten text (push_text). Glyph height in px; the pen width is fixed
@@ -92,6 +92,10 @@ BAND_HOLD_MS = 60      # delay between bands — fewer, bigger updates than
 TEXT_PX = 56  # every sentence fits one line in eink_hook's TEXT_W at this size
 TEXT_PARAGRAPH_GAP = 0.6       # extra space between paragraphs, in glyph heights
 TEXT_PARAGRAPH_PAUSE_MS = 700  # beat between finishing one paragraph and starting the next
+# Writing pace: pen points drawn per partial update, and ms between updates.
+# riddle's own pace (26 / 14) reads as brisk; this is a slower, calmer hand.
+TEXT_POINTS_PER_STEP = 12
+TEXT_STEP_MS = 20
 
 
 def _tight_bbox(img, alpha_threshold=16):
@@ -324,7 +328,9 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
     stages = [{"x": x, "w": w, "text": text, "px": px, "gap": TEXT_PARAGRAPH_GAP,
-               "hold_ms": TEXT_PARAGRAPH_PAUSE_MS} for text in paragraphs]
+               "hold_ms": TEXT_PARAGRAPH_PAUSE_MS,
+               "points_per_step": TEXT_POINTS_PER_STEP, "step_ms": TEXT_STEP_MS}
+              for text in paragraphs]
     stages[0]["y"] = y  # later paragraphs continue below, laid out by the viewer
     stages[-1]["hold_ms"] = 0
     manifest = {"clear_first": clear_first, "bg": list(BG), "stages": stages}

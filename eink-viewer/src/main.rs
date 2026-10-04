@@ -70,6 +70,12 @@ enum Stage {
         px: f32,
         #[serde(default)]
         hold_ms: u64,
+        /// Writing pace: pen points per partial update, and ms between
+        /// updates. Defaults are riddle's (ink::POINTS_PER_STEP / STEP_MS).
+        #[serde(default)]
+        points_per_step: Option<usize>,
+        #[serde(default)]
+        step_ms: Option<u64>,
     },
     /// Internal: Job queues this after the last stage when settle_after.
     #[serde(skip)]
@@ -182,7 +188,7 @@ fn ready_events(events_dir: &Path) -> Vec<PathBuf> {
 struct Job {
     dir: PathBuf,
     stages: std::collections::VecDeque<Stage>,
-    writer: Option<(ink::Writer, u64)>, // a text stage mid-write, + its hold_ms
+    writer: Option<(ink::Writer, u64, u64)>, // a text stage mid-write, + its step_ms, hold_ms
     text_bottom: i32,
     settle_after: bool,
     settled: bool,
@@ -231,7 +237,7 @@ impl Job {
 
     fn step(&mut self, client: &mut QtfbClient, font: &FontRef) -> io::Result<()> {
         let now = Instant::now();
-        if let Some((writer, hold_ms)) = &mut self.writer {
+        if let Some((writer, step_ms, hold_ms)) = &mut self.writer {
             let dirty = writer.step(client.framebuffer(), SCREEN_W, SCREEN_H);
             if let Some((dx, dy, dw, dh)) = dirty.rect(SCREEN_W, SCREEN_H) {
                 let _ = client.update_partial(dx, dy, dw, dh);
@@ -240,7 +246,7 @@ impl Job {
                 self.next_at = now + Duration::from_millis(*hold_ms);
                 self.writer = None;
             } else {
-                self.next_at = now + Duration::from_millis(ink::STEP_MS);
+                self.next_at = now + Duration::from_millis(*step_ms);
             }
             return Ok(());
         }
@@ -252,11 +258,12 @@ impl Job {
                 let _ = client.update_partial(x, y, w as i32, h as i32);
                 self.next_at = now + Duration::from_millis(hold_ms);
             }
-            Some(Stage::Text { x, y, gap, w, text, px, hold_ms }) => {
+            Some(Stage::Text { x, y, gap, w, text, px, hold_ms, points_per_step, step_ms }) => {
                 let y = y.unwrap_or(self.text_bottom + (gap * px) as i32);
                 let (strokes, bottom) = ink::plan(font, &text, x, y, w, px);
                 self.text_bottom = bottom;
-                self.writer = Some((ink::Writer::new(strokes), hold_ms));
+                let writer = ink::Writer::new(strokes, points_per_step.unwrap_or(ink::POINTS_PER_STEP));
+                self.writer = Some((writer, step_ms.unwrap_or(ink::STEP_MS), hold_ms));
                 self.next_at = now;
             }
             None if self.settle_after && !self.settled => {
@@ -392,14 +399,14 @@ fn preview(args: &[String]) {
     let mut fb = vec![0xffu8; SCREEN_W * SCREEN_H * 2];
     let mut steps = 0;
     {
-        let mut counter = ink::Writer::new(strokes.clone());
+        let mut counter = ink::Writer::new(strokes.clone(), ink::POINTS_PER_STEP);
         let mut scratch = fb.clone();
         while !counter.done() {
             counter.step(&mut scratch, SCREEN_W, SCREEN_H);
             steps += 1;
         }
     }
-    let mut writer = ink::Writer::new(strokes);
+    let mut writer = ink::Writer::new(strokes, ink::POINTS_PER_STEP);
     let mut i = 0;
     let mut shot = 1;
     while !writer.done() {

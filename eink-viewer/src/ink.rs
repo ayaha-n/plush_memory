@@ -12,8 +12,9 @@ pub const FONT_TTF: &[u8] = include_bytes!("../fonts/Yomogi-Regular.ttf");
 
 /// Pen radius in px — riddle's 2 reads as a fine nib at this panel density.
 pub const PEN_R: i32 = 2;
-/// Points drawn per partial update, and the pause between updates. Same
-/// pacing riddle uses for Tom's live replies (26 points / 14ms).
+/// Default points drawn per partial update, and the pause between updates —
+/// the pacing riddle uses for Tom's live replies (26 points / 14ms). A text
+/// stage can override both (see Stage::Text in main.rs).
 pub const POINTS_PER_STEP: usize = 26;
 pub const STEP_MS: u64 = 14;
 
@@ -106,16 +107,17 @@ impl Dirty {
     }
 }
 
-/// Walks a stroke plan, drawing up to POINTS_PER_STEP points per call.
+/// Walks a stroke plan, drawing up to `points_per_step` points per call.
 pub struct Writer {
     strokes: Vec<Vec<(i32, i32)>>,
     stroke_i: usize,
     point_i: usize,
+    points_per_step: usize,
 }
 
 impl Writer {
-    pub fn new(strokes: Vec<Vec<(i32, i32)>>) -> Self {
-        Writer { strokes, stroke_i: 0, point_i: 0 }
+    pub fn new(strokes: Vec<Vec<(i32, i32)>>, points_per_step: usize) -> Self {
+        Writer { strokes, stroke_i: 0, point_i: 0, points_per_step: points_per_step.max(1) }
     }
 
     pub fn done(&self) -> bool {
@@ -126,7 +128,7 @@ impl Writer {
     /// region that changed.
     pub fn step(&mut self, fb: &mut [u8], screen_w: usize, screen_h: usize) -> Dirty {
         let mut dirty = Dirty::default();
-        let mut budget = POINTS_PER_STEP;
+        let mut budget = self.points_per_step;
         while budget > 0 && !self.done() {
             let stroke = &self.strokes[self.stroke_i];
             if self.point_i >= stroke.len() {
