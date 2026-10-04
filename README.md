@@ -21,7 +21,7 @@ camera (D405)                       ┘        │
 Two ways to see it.
 
 - **HTML version**: the original way to view it, opening `plush_memory_camera.html` in a browser on a PC or monitor. Generated images are flat-color cartoon style (`classic`).
-- **e-ink version**: shown on a reMarkable Paper Pro screen as a picture-book page — illustrations materializing softly through partial refreshes in the upper part, and a short text written out by hand, stroke by stroke, below them (see [Picture-book text](#picture-book-text)). Generated images are pen-and-ink with a light watercolor wash, transparent background (`shepard` style, after E. H. Shepard's illustrations).
+- **e-ink version**: shown on a reMarkable Paper Pro screen as a picture-book page — a short text written out by hand, stroke by stroke, at the top, illustrations materializing softly through partial refreshes in the middle, and a closing line or two at the bottom (see [Picture-book text](#picture-book-text)). Generated images are pen-and-ink with a light watercolor wash, transparent background (`shepard` style, after E. H. Shepard's illustrations).
 
 Pick one look per node launch with `_display_target` (the two are never generated in parallel — still one API call per touch).
 
@@ -159,7 +159,9 @@ the file and restart the node, no rebuild needed:
 | `FINAL_HOLD_MS` | Pause on the finished black/white picture before the color stage lands |
 | `BW_THRESHOLD` | Luminance cutoff for binarizing the reveal |
 | `BG` | Background color — the *only* place it's set; `eink-viewer` reads it from the manifest instead of hardcoding its own copy |
-| `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background before its reveal starts (on by default; only the touch's first image ever sets this, so toggling it doesn't cause more than one blank) |
+| `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background before its page starts (on by default; only the touch's first event ever sets this, so toggling it doesn't cause more than one blank) |
+| `CLEAR_HOLD_MS` | Pause after that blank before anything is drawn — without it, the handwriting starting right away let the previous page ghost through |
+| `TEXT_POINTS_PER_STEP` / `TEXT_STEP_MS` | Handwriting pace: pen points per partial update, and ms between updates |
 
 ## Picture-book text
 
@@ -169,13 +171,13 @@ On the e-ink page, each touch writes a short text below the illustrations, in th
 2. an **episode** — one memory, picked at random per touch (never the same twice in a row)
 3. the **evidence** — the trace those touches left on it (fixed per part)
 
-and, once the newest illustration appears, a **closing** that records this very touch and says it will be remembered too. The first three are written right after the touch's first image; the closing alongside the newest image. Text and images are drawn concurrently.
+and, once the newest illustration appears, a **closing** that records this very touch and says it will be remembered too. The page is drawn in reading order, one thing at a time: the memory at the top, then the illustrations in the middle (top-left first), then the closing at the bottom, under the newest illustration. `scripts/eink_hook.py` pushes every event through one queue so they reach the tablet in that order, and the viewer runs them one after another.
 
 All of it lives in `data/memory_texts.json` — one entry per part (`opening` / `episodes` / `evidence`), and `_touch_line` for the closing (a template with `{year}`, `{month}`, `{day_ja}`, `{part_ja}`, … filled in by `scripts/memory_text.py`). Every sentence is a `ja`/`en` pair. The file is re-read on each touch, so edits apply without restarting the node. Write Japanese with spaces between words (分かち書き) — the viewer wraps lines on spaces. Every sentence should fit on one line of the text area (about 26 kana at the current size); the layout is sized for that.
 
 The handwriting itself happens on the tablet: the viewer rasterizes the text in the bundled Yomogi font, thins it to 1px skeleton strokes and traces them into ordered pen paths, then draws a few points per tiny partial refresh — the technique from [riddle](https://github.com/MaximeRivest/riddle) (see [Dependencies and credits](#dependencies-and-credits)). Pure black strokes on white are the case UFAST reveals without fading, so text needs no color-landing step.
 
-Page layout (`scripts/eink_hook.py`): images go into fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — and each image is fit inside its box. The text area is the strip below.
+Page layout (`scripts/eink_hook.py`): the memory text at the top, the closing at the bottom, and between them images in fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — each image fit inside its box.
 
 ## Image data layout
 
@@ -208,7 +210,7 @@ data/images/
 | `scripts/eink_memory_push.py` | Turns a generated image into staged materialize frames for e-ink, or a text into a handwriting event, and pushes them to the tablet over SSH |
 | `scripts/memory_text.py` | Picks the picture-book text for a touch from `data/memory_texts.json` |
 | `data/memory_texts.json` | The picture-book text, per part, in Japanese and English |
-| `eink-viewer/` | Rust AppLoad app running on the tablet; runs events concurrently — blits image frames and writes text stroke by stroke, via partial refresh |
+| `eink-viewer/` | Rust AppLoad app running on the tablet; runs events in order — blits image frames and writes text stroke by stroke, via partial refresh |
 | `plush_memory_camera.html` | The HTML display page |
 
 ## Dependencies and credits

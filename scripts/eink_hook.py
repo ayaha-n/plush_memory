@@ -16,10 +16,10 @@ retired memory is simply left on the panel until the next one overwrites
 that spot — more "diary page" than "disappearing toast", and one less thing
 to keep in sync with the HTML's fade-out timing.
 
-Unlike the HTML, the e-ink page is laid out like a picture book: the
-illustrations fill the upper part of the panel, and the bottom is a text
-area where the viewer writes, by hand, the touched part's memory (right
-after the touch's first image) and then a line recording this touch itself (right after the newly generated "latest" image) — see
+Unlike the HTML, the e-ink page is laid out like a picture book: at the
+top, the viewer writes by hand the touched part's memory (right after the
+touch's first image); the illustrations fill the middle; and at the bottom
+it writes the lines recording this touch itself (right after the newly generated "latest" image) — see
 memory_text.py.
 """
 import asyncio
@@ -37,31 +37,32 @@ ENABLED = True
 SCREEN_W, SCREEN_H = 1620, 2160
 
 
-# Picture area (y 20-1420), above the text. The latest image gets the
+# Picture area (y 410-1870), between the memory text above and the
+# closing lines below. The latest image gets the
 # middle; around it, SLOTS are SLOT_PX boxes laid out so none of them
 # overlap each other or the latest one: four down each side, plus one above
 # and one below the middle. Images are fit inside their box (width and
 # height), so even a tall cutout stays in its slot.
 SLOT_PX = 320
 LATEST_PX = 520
-LATEST_CENTER = (810, 720)
+LATEST_CENTER = (810, 1140)
 SLOTS = (
-    [(185, y) for y in (180, 540, 900, 1260)]
-    + [(1435, y) for y in (180, 540, 900, 1260)]
-    + [(810, 180), (810, 1260)]
+    [(185, y) for y in (570, 950, 1330, 1710)]
+    + [(1435, y) for y in (570, 950, 1330, 1710)]
+    + [(810, 570), (810, 1710)]
 )
 
-# Picture-book text area, below the pictures. Two fixed slots at
-# eink_memory_push.TEXT_PX: the memory (three sentences), then this
-# touch's closing lines (two). TEXT_W is wide enough that every sentence
+# Picture-book text. Two fixed slots at eink_memory_push.TEXT_PX: the
+# memory (three sentences) above the pictures, this touch's closing lines
+# (two) below them. TEXT_W is wide enough that every sentence
 # in data/memory_texts.json, ja and en, fits on one line.
 # Each slot is blanked just before it's written, so the previous touch's
 # text never shows through when CLEAR_BEFORE_TOUCH is off.
 TEXT_X, TEXT_W = 70, 1480
-MEMORY_TEXT_Y = 1480
-TOUCH_LINE_Y = 1850
-_MEMORY_SLOT = (TEXT_X - 20, MEMORY_TEXT_Y - 20, TEXT_W + 40, TOUCH_LINE_Y - MEMORY_TEXT_Y - 10)
-_TOUCH_SLOT = (TEXT_X - 20, TOUCH_LINE_Y - 20, TEXT_W + 40, SCREEN_H - TOUCH_LINE_Y)
+MEMORY_TEXT_Y = 60
+TOUCH_LINE_Y = 1920
+_MEMORY_SLOT = (TEXT_X - 20, MEMORY_TEXT_Y - 20, TEXT_W + 40, 350)
+_TOUCH_SLOT = (TEXT_X - 20, TOUCH_LINE_Y - 20, TEXT_W + 40, SCREEN_H - TOUCH_LINE_Y + 20)
 
 # Slots not yet used on the current page, in the order they'll be handed
 # out. show() starts a fresh page; when they run out (many TMP_IMAGEs during
