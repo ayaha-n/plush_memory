@@ -16,11 +16,13 @@ retired memory is simply left on the panel until the next one overwrites
 that spot — more "diary page" than "disappearing toast", and one less thing
 to keep in sync with the HTML's fade-out timing.
 
-Unlike the HTML, the e-ink page is laid out like a picture book: at the
-top, the viewer writes by hand the touched part's memory (right after the
-touch's first image); the illustrations fill the middle; and at the bottom
-it writes the lines recording this touch itself (right after the newly generated "latest" image) — see
-memory_text.py.
+Unlike the HTML, the e-ink page is laid out like a picture book, and
+drawn in reading order: first the touched part's memory is written by hand
+at the top, then the illustrations appear in the middle (top-left first),
+and last, under the newest one, the lines recording this touch itself —
+see memory_text.py. To keep that order, every event goes through one queue
+(_enqueue) and is pushed only after the previous one has landed on the
+tablet; the viewer then runs them strictly one after another.
 """
 import asyncio
 import os
@@ -70,9 +72,14 @@ _TOUCH_SLOT = (TEXT_X - 20, TOUCH_LINE_Y - 20, TEXT_W + 40, SCREEN_H - TOUCH_LIN
 _free_slots = []
 
 
+def _reading_order(slots):
+    """Top-left first, row by row."""
+    return sorted(slots, key=lambda c: (c[1], c[0]))
+
+
 def _next_slot():
     if not _free_slots:
-        _free_slots.extend(random.sample(SLOTS, len(SLOTS)))
+        _free_slots.extend(_reading_order(SLOTS))
     return _free_slots.pop(0)
 
 
@@ -80,8 +87,30 @@ def _box(center, size):
     cx, cy = center
     return (cx - size // 2, cy - size // 2, size, size)
 
-# html's `displaying_time`: stagger between images in a SHOW_IMAGE batch.
-STAGGER_SEC = 2.0
+
+# One queue for every e-ink event, pushed strictly one at a time, so they
+# reach the tablet (and get drawn) in the order they were asked for.
+_queue = None
+_seq = 0
+
+
+def _enqueue(make_push):
+    """Queue `make_push` (an async callable taking the event id) behind
+    everything already queued."""
+    global _queue
+    if _queue is None:
+        _queue = asyncio.Queue()
+        asyncio.get_event_loop().create_task(_run_queue())
+    _queue.put_nowait(make_push)
+
+
+async def _run_queue():
+    global _seq
+    while True:
+        make_push = await _queue.get()
+        _seq += 1
+        # Ids sort in push order — the viewer picks up events by name.
+        await make_push(f"{int(time.time() * 1000):013d}_{_seq:05d}")
 
 _image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
 
@@ -116,10 +145,7 @@ def _image_path(kind: str, img_id):
     return None
 
 
-async def _push(kind: str, img_id, center, size: int,
-                 event_id: str, clear_first: bool = False, settle_after: bool = False):
-    if not ENABLED:
-        return
+async def _push(kind: str, img_id, center, size: int, event_id: str):
     path = _image_path(kind, img_id)
     if path is None:
         return
@@ -128,103 +154,66 @@ async def _push(kind: str, img_id, center, size: int,
     try:
         # push_memory crops to the subject's own tight bounding box, fits it
         # in the size x size box and centers it on (cx, cy). The box is
-        # blanked first (unless the whole page just was), so a reused slot
-        # doesn't keep the edges of whatever image was there before.
+        # blanked first, so a reused slot doesn't keep the edges of whatever
+        # image was there before.
         await loop.run_in_executor(
             None, lambda: eink_memory_push.push_memory(
-                path, cx, cy, size, event_id, clear_first, settle_after,
-                max_h=size, clear_rect=None if clear_first else _box(center, size)))
+                path, cx, cy, size, f"{event_id}_{kind}_{img_id}",
+                max_h=size, clear_rect=_box(center, size)))
     except Exception as e:
         rospy.logwarn(f"eink_hook: push failed for {event_id}: {e}")
 
 
-async def _delayed_push(kind, img_id, center, size, delay_sec, event_id,
-                         clear_first=False, settle_after=False):
-    if delay_sec > 0:
-        await asyncio.sleep(delay_sec)
-    await _push(kind, img_id, center, size, event_id, clear_first, settle_after)
-
-
 async def _push_text(paragraphs, y, slot, event_id, clear_first=False):
-    if not ENABLED or not paragraphs:
+    if not paragraphs:
         return
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
             None, lambda: eink_memory_push.push_text(
-                paragraphs, TEXT_X, y, TEXT_W, event_id=event_id,
+                paragraphs, TEXT_X, y, TEXT_W, event_id=f"{event_id}_text",
                 clear_first=clear_first, clear_rect=slot))
     except Exception as e:
         rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
 
 
-async def _first_image_then_memory(kind, push_first):
-    """Write the part's memory once the touch's first image (and its
-    clear_first blank) has been handed to the viewer, so the blank can't
-    wipe the text. The viewer runs events one at a time, so the memory is
-    written while the rest of the batch is still on its way."""
-    await push_first
-    await _push_text(memory_text.memory_paragraphs(kind), MEMORY_TEXT_Y, _MEMORY_SLOT,
-                     f"text_memory_{kind}_{int(time.time() * 1000)}")
-
-
 def show(kind: str, selected_ids):
-    """Mirror a SHOW_IMAGE broadcast: stagger up to 8 ids into free SLOTS
-    on a fresh page, same 2s-apart pacing as the HTML. Only the very first image of this
-    touch asks the viewer for its one blank-and-flash (see push_memory's
-    clear_first, gated by CLEAR_BEFORE_TOUCH) — a touch can end up pushing
-    many images (this batch, plus later TMP_IMAGE/APPEND_IMAGE calls), and
-    flashing for every one of them was the actual source of the flicker,
-    not the per-tile reveal itself.
+    """Mirror a SHOW_IMAGE broadcast as a fresh page: the part's memory,
+    then up to 8 ids in slots, drawn top-left first. The slots themselves
+    are picked at random so a short batch still spreads over the page.
 
-    No settle_after here (or in append_latest, below) any more: measured on
-    -device, the final color stage settles cleanly from its own ordinary
-    UFAST partial update — it's a single update, not the long run of
-    sequential tile updates that caused fading, so it never needed the
-    extra full-quality waveform. request_full_refresh() also flashes the
-    *whole* panel (the qtfb message carries no region), so skipping it
-    stops this touch's color settle from disturbing every other memory
-    already sitting elsewhere on screen."""
+    Only the memory text asks the viewer for the touch's one blank of the
+    panel (clear_first, gated by CLEAR_BEFORE_TOUCH) — a touch can push
+    many events, and blanking for each was what used to cause flicker.
+    No settle_after anywhere: measured on-device, the final color stage
+    settles cleanly from its own single UFAST partial update, and
+    request_full_refresh() would flash the *whole* panel."""
     if not ENABLED:
         return
-    _free_slots[:] = random.sample(SLOTS, len(SLOTS))
-    if not selected_ids:
-        # Nothing for the grid (only one image exists, held back as the
-        # latest): still start a fresh page and write the memory.
-        asyncio.create_task(_push_text(
-            memory_text.memory_paragraphs(kind), MEMORY_TEXT_Y, _MEMORY_SLOT,
-            f"text_memory_{kind}_{int(time.time() * 1000)}",
-            clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH))
-        return
-    for idx, img_id in enumerate(selected_ids[:8]):
-        push = _delayed_push(
-            kind, img_id, _next_slot(), SLOT_PX,
-            idx * STAGGER_SEC, f"show_{kind}_{img_id}",
-            clear_first=(idx == 0 and eink_memory_push.CLEAR_BEFORE_TOUCH),
-        )
-        asyncio.create_task(_first_image_then_memory(kind, push) if idx == 0 else push)
+    ids = selected_ids[:8]
+    chosen = random.sample(SLOTS, len(ids))
+    _free_slots[:] = _reading_order(c for c in SLOTS if c not in chosen)
+    paragraphs = memory_text.memory_paragraphs(kind)
+    _enqueue(lambda eid: _push_text(paragraphs, MEMORY_TEXT_Y, _MEMORY_SLOT, eid,
+                                    clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH))
+    for img_id, slot in zip(ids, _reading_order(chosen)):
+        _enqueue(lambda eid, i=img_id, c=slot: _push(kind, i, c, SLOT_PX, eid))
 
 
 def tmp(kind: str, img_id):
     """Mirror a TMP_IMAGE broadcast: one image in the next free slot."""
     if not ENABLED:
         return
-    asyncio.create_task(_push(kind, img_id, _next_slot(), SLOT_PX, f"tmp_{kind}_{img_id}"))
+    slot = _next_slot()
+    _enqueue(lambda eid: _push(kind, img_id, slot, SLOT_PX, eid))
 
 
 def append_latest(kind: str, img_id):
     """Mirror an APPEND_IMAGE broadcast: the newly generated/fallback image,
-    larger, at the fixed 'latest' spot. No clear_first or settle_after here
-    — see show()'s docstring for why settle_after isn't needed anywhere any
-    more, and clear_first stays SHOW_IMAGE-only to match the HTML's own
-    single reset point per touch."""
+    larger, in the middle — then the lines that record this touch, at the
+    bottom of the page."""
     if not ENABLED:
         return
-    asyncio.create_task(_latest_then_touch_line(kind, img_id))
-
-
-async def _latest_then_touch_line(kind, img_id):
-    """The newest memory, then the line that records this touch under it."""
-    await _push(kind, img_id, LATEST_CENTER, LATEST_PX, f"latest_{kind}_{img_id}")
-    await _push_text(memory_text.touch_line(kind), TOUCH_LINE_Y, _TOUCH_SLOT,
-                     f"text_touch_{kind}_{int(time.time() * 1000)}")
+    lines = memory_text.touch_line(kind)
+    _enqueue(lambda eid: _push(kind, img_id, LATEST_CENTER, LATEST_PX, eid))
+    _enqueue(lambda eid: _push_text(lines, TOUCH_LINE_Y, _TOUCH_SLOT, eid))

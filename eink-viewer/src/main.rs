@@ -42,6 +42,10 @@ struct Manifest {
     settle_after: bool,
     #[serde(default)]
     bg: Option<[u8; 3]>,
+    /// With clear_first: pause after the blank before the first stage, so
+    /// the panel finishes clearing before anything is drawn over it.
+    #[serde(default)]
+    clear_hold_ms: u64,
     stages: Vec<Stage>,
 }
 
@@ -113,11 +117,11 @@ fn main() {
     let mut jobs: Vec<Job> = Vec::new();
     let mut last_poll = Instant::now() - POLL_INTERVAL;
 
-    // Events run concurrently, not one after another: each READY event
-    // becomes a Job, and every pass advances whichever jobs are due by one
-    // step (one image stage, or one small batch of pen points). So a touch's
-    // handwriting keeps going while its pictures arrive and reveal, instead
-    // of waiting its turn behind them.
+    // Each READY event becomes a Job, queued in name order (the PC side
+    // names them so that sorts in push order). Only the front job runs —
+    // one step per pass (one image stage, or one small batch of pen points)
+    // — so the page is drawn in exactly the order it was sent: text, then
+    // pictures, then the closing text.
     loop {
         // Drain input/window events; an Err means AppLoad closed our window.
         if client.drain_events().is_err() {
@@ -131,7 +135,7 @@ fn main() {
                 if jobs.iter().any(|j| j.dir == dir) {
                     continue;
                 }
-                match Job::start(&mut client, dir.clone()) {
+                match Job::start(dir.clone()) {
                     Ok(job) => jobs.push(job),
                     Err(e) => {
                         eprintln!("plush_memory_viewer: event {:?} failed: {e}", dir);
@@ -142,7 +146,7 @@ fn main() {
         }
 
         let now = Instant::now();
-        for job in jobs.iter_mut().filter(|j| j.next_at <= now) {
+        if let Some(job) = jobs.first_mut().filter(|j| j.next_at <= now) {
             if let Err(e) = job.step(&mut client, &font) {
                 eprintln!("plush_memory_viewer: event {:?} failed: {e}", job.dir);
                 job.finished = true;
@@ -155,7 +159,7 @@ fn main() {
             !j.finished
         });
 
-        let wake = jobs.iter().map(|j| j.next_at).min().unwrap_or(now + POLL_INTERVAL);
+        let wake = jobs.first().map_or(now + POLL_INTERVAL, |j| j.next_at);
         let wait = wake.saturating_duration_since(Instant::now()).min(POLL_INTERVAL);
         std::thread::sleep(wait.max(Duration::from_millis(1)));
     }
@@ -188,6 +192,8 @@ fn ready_events(events_dir: &Path) -> Vec<PathBuf> {
 struct Job {
     dir: PathBuf,
     stages: std::collections::VecDeque<Stage>,
+    clear_bg: Option<(u8, u8, u8)>, // clear_first, done on the job's first step
+    clear_hold_ms: u64,
     writer: Option<(ink::Writer, u64, u64)>, // a text stage mid-write, + its step_ms, hold_ms
     text_bottom: i32,
     settle_after: bool,
@@ -197,11 +203,28 @@ struct Job {
 }
 
 impl Job {
-    fn start(client: &mut QtfbClient, dir: PathBuf) -> io::Result<Job> {
+    fn start(dir: PathBuf) -> io::Result<Job> {
         let manifest_bytes = fs::read(dir.join("manifest.json"))?;
         let manifest: Manifest = serde_json::from_slice(&manifest_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
+        Ok(Job {
+            clear_bg: manifest
+                .clear_first
+                .then(|| manifest.bg.map(|c| (c[0], c[1], c[2])).unwrap_or(DEFAULT_BG_RGB)),
+            clear_hold_ms: manifest.clear_hold_ms,
+            dir,
+            stages: manifest.stages.into(),
+            writer: None,
+            text_bottom: 0,
+            settle_after: manifest.settle_after,
+            settled: false,
+            next_at: Instant::now(),
+            finished: false,
+        })
+    }
+
+    fn step(&mut self, client: &mut QtfbClient, font: &FontRef) -> io::Result<()> {
         // One full-panel flash per *touch*, not per image event: dozens of tiny
         // UFAST partial updates in a row (the tile reveal below) leave faint
         // random-looking ghosting from un-settled gray levels, since nothing
@@ -217,25 +240,20 @@ impl Job {
         // run of sequential updates that ghosts. That means no GC16-style
         // flash/invert here either, and no need to wait out a flash before the
         // reveal starts.
-        if manifest.clear_first {
-            let (r, g, b) = manifest.bg.map(|c| (c[0], c[1], c[2])).unwrap_or(DEFAULT_BG_RGB);
-            fill_bg(client.framebuffer(), (r, g, b));
+        //
+        // Done when the job reaches the front of the queue, not when it
+        // arrives, so it never wipes a page that's still being drawn.
+        //
+        // Then wait clear_hold_ms: handwriting's rapid tiny updates started
+        // right on top of the blank, before the panel had finished it, and
+        // the previous page ghosted through.
+        if let Some(bg) = self.clear_bg.take() {
+            fill_bg(client.framebuffer(), bg);
             let _ = client.update_all();
+            self.next_at = Instant::now() + Duration::from_millis(self.clear_hold_ms);
+            return Ok(());
         }
 
-        Ok(Job {
-            dir,
-            stages: manifest.stages.into(),
-            writer: None,
-            text_bottom: 0,
-            settle_after: manifest.settle_after,
-            settled: false,
-            next_at: Instant::now(),
-            finished: false,
-        })
-    }
-
-    fn step(&mut self, client: &mut QtfbClient, font: &FontRef) -> io::Result<()> {
         let now = Instant::now();
         if let Some((writer, step_ms, hold_ms)) = &mut self.writer {
             let dirty = writer.step(client.framebuffer(), SCREEN_W, SCREEN_H);

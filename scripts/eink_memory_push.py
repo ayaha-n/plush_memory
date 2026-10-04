@@ -59,6 +59,10 @@ REVEAL_ORDER = "dither"
 # below) before its tiles start appearing. Off leaves whatever the previous
 # touch left on screen in place until these new tiles draw over it.
 CLEAR_BEFORE_TOUCH = True
+# Pause after that blank before drawing anything: the memory text's rapid
+# small updates, started right away, caught the panel mid-clear and the
+# previous page ghosted through.
+CLEAR_HOLD_MS = 1500
 
 TILE_COLUMNS = 8       # fixed column count, not a fixed pixel size — a
                        # larger image gets proportionally larger tiles (and
@@ -333,7 +337,8 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
               for text in paragraphs]
     stages[0]["y"] = y  # later paragraphs continue below, laid out by the viewer
     stages[-1]["hold_ms"] = 0
-    manifest = {"clear_first": clear_first, "bg": list(BG), "stages": stages}
+    manifest = {"clear_first": clear_first, "clear_hold_ms": CLEAR_HOLD_MS,
+                "bg": list(BG), "stages": stages}
 
     with tempfile.TemporaryDirectory() as tmp:
         files = []
