@@ -56,6 +56,30 @@ ssh-copy-id root@10.11.99.1          # once, to set up SSH key auth
 # launch the "Plush Memory" app from AppLoad on the tablet
 ```
 
+The target host comes from the `EINK_HOST` environment variable (default `10.11.99.1`, i.e. USB). To run without the USB cable, the tablet can instead be reached wirelessly over a VPN such as [Tailscale](https://tailscale.com/) (tablet-side setup documented separately). If its SSH server listens on a non-default port, add an entry to `~/.ssh/config` so `ssh`/`scp` pick it up — for example:
+
+```
+Host plush-eink
+    HostName plush-eink
+    User root
+    Port 2222
+```
+
+then launch with:
+
+```bash
+EINK_HOST=plush-eink rosrun plush_memory touch_image_camera_new.py _display_target:=eink _enable_generation:=False
+```
+
+The wireless route won't work when:
+
+- the network has no internet access (Tailscale needs to reach its coordination server), e.g. a closed exhibition LAN;
+- the Wi-Fi requires a browser login (captive portal), which the tablet can't get through on its own;
+- the tablet is asleep or off Wi-Fi;
+- the tablet's OS was updated and the Tailscale setup hasn't been redone.
+
+In those cases, fall back to the USB cable (unset `EINK_HOST`). Networks that block Tailscale's direct UDP traffic still work, just via a relay with higher latency.
+
 ### How the e-ink reveal avoids flashing/ghosting
 
 This took a lot of on-device trial and error, so it's worth writing down
