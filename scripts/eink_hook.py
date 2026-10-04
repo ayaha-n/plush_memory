@@ -144,14 +144,15 @@ async def _delayed_push(kind, img_id, center, size, delay_sec, event_id,
     await _push(kind, img_id, center, size, event_id, clear_first, settle_after)
 
 
-async def _push_text(paragraphs, y, slot, event_id):
+async def _push_text(paragraphs, y, slot, event_id, clear_first=False):
     if not ENABLED or not paragraphs:
         return
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
             None, lambda: eink_memory_push.push_text(
-                paragraphs, TEXT_X, y, TEXT_W, event_id=event_id, clear_rect=slot))
+                paragraphs, TEXT_X, y, TEXT_W, event_id=event_id,
+                clear_first=clear_first, clear_rect=slot))
     except Exception as e:
         rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
 
@@ -186,6 +187,14 @@ def show(kind: str, selected_ids):
     if not ENABLED:
         return
     _free_slots[:] = random.sample(SLOTS, len(SLOTS))
+    if not selected_ids:
+        # Nothing for the grid (only one image exists, held back as the
+        # latest): still start a fresh page and write the memory.
+        asyncio.create_task(_push_text(
+            memory_text.memory_paragraphs(kind), MEMORY_TEXT_Y, _MEMORY_SLOT,
+            f"text_memory_{kind}_{int(time.time() * 1000)}",
+            clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH))
+        return
     for idx, img_id in enumerate(selected_ids[:8]):
         push = _delayed_push(
             kind, img_id, _next_slot(), SLOT_PX,

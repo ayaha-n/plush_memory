@@ -175,13 +175,13 @@ async def hide_current(kind: str):
 def _is_session_valid(local_session: int) -> bool:
     return gen_session == local_session
 
-async def _append_final_no_generation(kind: str, local_session: int):
+async def _append_final_no_generation(kind: str, local_session: int, latest_id=None):
     if not _is_session_valid(local_session):
         rospy.loginfo(f"{kind} fallback skipped, hide_image")
         await hide_current(kind)
         pending_hide[kind] = False
         return
-    fallback_id = _pick_fallback_id(kind)
+    fallback_id = latest_id if latest_id is not None else _pick_fallback_id(kind)
     if fallback_id >= 0:
         appended_id[kind] = fallback_id
         if fallback_id not in shown_ids[kind]:  
@@ -207,9 +207,16 @@ async def publish_to_web(kind: str):
             rospy.loginfo(f"No {kind} images available.")
             return
 
-        # select 8 images
-        k = min(8, len(ids_now))
-        selected = ids_now[:] if len(ids_now) <= 8 else random.sample(ids_now, 8)
+        # select 8 images. Without generation, pick up to 9 and hold the
+        # last one back as the "latest" (center) image, so there is always
+        # one to append even when every image would fit in the grid.
+        latest_id = None
+        if ENABLE_GENERATION:
+            selected = ids_now[:] if len(ids_now) <= 8 else random.sample(ids_now, 8)
+        else:
+            picked = random.sample(ids_now, min(9, len(ids_now)))
+            selected, latest_id = picked[:-1], picked[-1]
+        k = len(selected)
         shown_ids[kind] = selected[:]
 
         # check if session is valid
@@ -228,14 +235,15 @@ async def publish_to_web(kind: str):
         
         # send selected image_ids and show image
         id_string = ",".join(str(i) for i in selected)
-        await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
+        if selected:
+            await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
         eink_hook.show(kind, selected)
         rospy.loginfo(f"Sent {kind} image list (n={len(selected)})")
         #await asyncio.sleep(k * 2.0 + 0.5)
         await _cooperative_sleep(k * 2.0 + 0.5, local_session)
 
         if not ENABLE_GENERATION:
-            await _append_final_no_generation(kind, local_session)
+            await _append_final_no_generation(kind, local_session, latest_id)
                         
         else:
             temp_loop = asyncio.create_task(_append_while_generating(kind, local_session, gen_task))
