@@ -19,6 +19,14 @@ pub const STEP_MS: u64 = 14;
 
 const LINE_SPACING: f32 = 1.5;
 
+/// Glyphs are rasterized at this multiple of their size, thinned, and the
+/// traced points scaled back down. Zhang-Suen thinning erases a diagonal
+/// that is only 2px thick outright — at 56px Yomogi's strokes are about
+/// that thin, so e.g. the lower half of く vanished. Supersampling, plus a
+/// 1px dilation for the hairline tails, makes every stroke thick enough to
+/// leave a skeleton.
+const SUPERSAMPLE: f32 = 3.0;
+
 /// Screen-space strokes for `text`, word-wrapped into a box `w` wide whose
 /// top-left is (x, y). Lines are left-aligned, like a picture book's text
 /// block. Returns the strokes plus the y just below the last line.
@@ -28,14 +36,39 @@ pub fn plan(font: &FontRef, text: &str, x: i32, y: i32, w: i32, px: f32) -> (Vec
     let mut strokes = Vec::new();
     let mut cy = y;
     for line_text in &lines {
-        let mut raster = script::rasterize_line(font, line_text, px);
+        let mut raster = script::rasterize_line(font, line_text, px * SUPERSAMPLE);
+        dilate(&mut raster);
         script::thin(&mut raster);
         for s in script::trace(&raster) {
-            strokes.push(s.iter().map(|&(sx, sy)| (x + sx, cy + sy)).collect());
+            let mut pts: Vec<(i32, i32)> = Vec::with_capacity(s.len() / 2);
+            for &(sx, sy) in &s {
+                let p = (x + (sx as f32 / SUPERSAMPLE).round() as i32, cy + (sy as f32 / SUPERSAMPLE).round() as i32);
+                if pts.last() != Some(&p) {
+                    pts.push(p);
+                }
+            }
+            strokes.push(pts);
         }
         cy += line_h;
     }
     (strokes, cy)
+}
+
+/// Grow the inked mask by one pixel (8-neighborhood).
+fn dilate(line: &mut script::Line) {
+    let (w, h) = (line.width, line.height);
+    let src = line.mask.clone();
+    for y in 0..h {
+        for x in 0..w {
+            if src[y * w + x] {
+                continue;
+            }
+            let ys = y.saturating_sub(1)..(y + 2).min(h);
+            line.mask[y * w + x] = ys.into_iter().any(|ny| {
+                (x.saturating_sub(1)..(x + 2).min(w)).any(|nx| src[ny * w + nx])
+            });
+        }
+    }
 }
 
 /// Dirty-rectangle accumulator for one partial update.
