@@ -21,7 +21,7 @@ camera (D405)                       ┘        │
 Two ways to see it.
 
 - **HTML version**: the original way to view it, opening `plush_memory_camera.html` in a browser on a PC or monitor. Generated images are flat-color cartoon style (`classic`).
-- **e-ink version**: shown on a reMarkable Paper Pro screen, materializing softly through partial refreshes. Generated images are pen-and-ink with a light watercolor wash, transparent background (`shepard` style, after E. H. Shepard's illustrations).
+- **e-ink version**: shown on a reMarkable Paper Pro screen as a picture-book page — illustrations materializing softly through partial refreshes in the upper part, and a short text written out by hand, stroke by stroke, below them (see [Picture-book text](#picture-book-text)). Generated images are pen-and-ink with a light watercolor wash, transparent background (`shepard` style, after E. H. Shepard's illustrations).
 
 Pick one look per node launch with `_display_target` (the two are never generated in parallel — still one API call per touch).
 
@@ -35,7 +35,8 @@ rosrun plush_memory touch_image_camera_new.py _display_target:=html _enable_gene
 rosrun plush_memory touch_image_camera_new.py _display_target:=eink _enable_generation:=True
 ```
 
-- `_enable_generation:=False` skips new generation and only falls back to existing images (useful for testing without a camera attached).
+- `_enable_generation:=False` skips new generation and uses existing images only (useful for testing without a camera attached): up to 9 are picked, and the last one takes the "latest" spot in the middle.
+- `_text_lang:=en` switches the e-ink page's text to English (default `ja`).
 - Image generation needs the `OPENAI_API_KEY` environment variable (`scripts/illustration_and_combine_new.py`, using the `gpt-image-1` image-edit API).
 
 ### Viewing the HTML version
@@ -50,6 +51,18 @@ cd plush_memory && python3 -m http.server 8000
 ### Viewing the e-ink version
 
 The reMarkable Paper Pro needs `eink-viewer/` (Rust) built and installed via AppLoad beforehand (xovi + AppLoad setup, using `remagic` etc. — documented separately). `eink_memory_push.py` sends images to the tablet over SSH.
+
+Building the viewer needs only a Rust toolchain ([rustup](https://rustup.rs/)) — it cross-compiles to a static musl binary with the bundled `rust-lld`, so no aarch64 C toolchain is required (`eink-viewer/.cargo/config.toml`):
+
+```bash
+rustup target add aarch64-unknown-linux-musl
+cd eink-viewer && cargo build --release --target aarch64-unknown-linux-musl
+scp target/aarch64-unknown-linux-musl/release/plush_memory_viewer \
+    root@10.11.99.1:/home/root/xovi/exthome/appload/plush_memory_viewer/
+# then close and relaunch the app from AppLoad
+```
+
+`cargo run --release -- --preview out 56 1480 "some text"` renders a text stage off-device into `out_1.png`…`out_3.png` (progress snapshots), for checking layout without the tablet.
 
 ```bash
 ssh-copy-id root@10.11.99.1          # once, to set up SSH key auth
@@ -148,6 +161,22 @@ the file and restart the node, no rebuild needed:
 | `BG` | Background color — the *only* place it's set; `eink-viewer` reads it from the manifest instead of hardcoding its own copy |
 | `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background before its reveal starts (on by default; only the touch's first image ever sets this, so toggling it doesn't cause more than one blank) |
 
+## Picture-book text
+
+On the e-ink page, each touch writes a short text below the illustrations, in the plush's narrator voice:
+
+1. an **opening** — it has been touched there many times (fixed per part)
+2. an **episode** — one memory, picked at random per touch (never the same twice in a row)
+3. the **evidence** — the trace those touches left on it (fixed per part)
+
+and, once the newest illustration appears, a **closing** that records this very touch and says it will be remembered too. The first three are written right after the touch's first image; the closing alongside the newest image. Text and images are drawn concurrently.
+
+All of it lives in `data/memory_texts.json` — one entry per part (`opening` / `episodes` / `evidence`), and `_touch_line` for the closing (a template with `{year}`, `{month}`, `{day_ja}`, `{part_ja}`, … filled in by `scripts/memory_text.py`). Every sentence is a `ja`/`en` pair. The file is re-read on each touch, so edits apply without restarting the node. Write Japanese with spaces between words (分かち書き) — the viewer wraps lines on spaces. Every sentence should fit on one line of the text area (about 26 kana at the current size); the layout is sized for that.
+
+The handwriting itself happens on the tablet: the viewer rasterizes the text in the bundled Yomogi font, thins it to 1px skeleton strokes and traces them into ordered pen paths, then draws a few points per tiny partial refresh — the technique from [riddle](https://github.com/MaximeRivest/riddle) (see [Dependencies and credits](#dependencies-and-credits)). Pure black strokes on white are the case UFAST reveals without fading, so text needs no color-landing step.
+
+Page layout (`scripts/eink_hook.py`): images go into fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — and each image is fit inside its box. The text area is the strip below.
+
 ## Image data layout
 
 ```
@@ -175,10 +204,19 @@ data/images/
 | `scripts/capture_on_touch.py` | Captures a photo from the camera (D405) |
 | `scripts/draw_on_touch.py` | Capture → illustrate the person → combine with the bear into the final image |
 | `scripts/illustration_and_combine_new.py` | OpenAI image-edit API calls, prompt and style definitions |
-| `scripts/eink_hook.py` | Rides along on the HTML side's SHOW_IMAGE/TMP_IMAGE/APPEND_IMAGE to build the matching e-ink display events |
-| `scripts/eink_memory_push.py` | Turns a generated image into staged materialize frames for e-ink and pushes them to the tablet over SSH |
-| `eink-viewer/` | Rust AppLoad app running on the tablet; blits frames in turn via partial refresh |
+| `scripts/eink_hook.py` | Rides along on the HTML side's SHOW_IMAGE/TMP_IMAGE/APPEND_IMAGE to build the matching e-ink display events; owns the page layout |
+| `scripts/eink_memory_push.py` | Turns a generated image into staged materialize frames for e-ink, or a text into a handwriting event, and pushes them to the tablet over SSH |
+| `scripts/memory_text.py` | Picks the picture-book text for a touch from `data/memory_texts.json` |
+| `data/memory_texts.json` | The picture-book text, per part, in Japanese and English |
+| `eink-viewer/` | Rust AppLoad app running on the tablet; runs events concurrently — blits image frames and writes text stroke by stroke, via partial refresh |
 | `plush_memory_camera.html` | The HTML display page |
+
+## Dependencies and credits
+
+- **[MaximeRivest/riddle](https://github.com/MaximeRivest/riddle)** (MIT License) — the e-ink viewer is built on code taken from it, almost verbatim: `eink-viewer/src/qtfb.rs` (the AppLoad qtfb client) and `eink-viewer/src/script.rs` (text → handwriting strokes: rasterize, Zhang-Suen thinning, trace), plus its pen-drawing pacing in `eink-viewer/src/ink.rs`. Its license is in `eink-viewer/LICENSE-riddle`.
+- **[Yomogi](https://github.com/satsuyako/YomogiFont)** font (SIL Open Font License 1.1) — the handwriting on the e-ink page; bundled as `eink-viewer/fonts/Yomogi-Regular.ttf`, license in `eink-viewer/fonts/OFL.txt`.
+- **xovi + AppLoad** on the tablet (set up separately) — the viewer runs as an AppLoad app.
+- **OpenAI API** (`gpt-image-1`) — illustration generation.
 
 ## Known limitations
 
