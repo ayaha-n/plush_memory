@@ -423,9 +423,12 @@ def read_orientation(host=EINK_HOST, app_dir=EINK_APP_DIR):
 
 
 def pending_events(host=EINK_HOST, app_dir=EINK_APP_DIR):
-    """How many events are still on the tablet — the viewer deletes each
-    event dir once it has finished drawing it, so 0 means the panel is done."""
-    out = ssh(f"ls -1 {app_dir}/events 2>/dev/null | wc -l", host)
+    """How many events the tablet has yet to draw — the viewer deletes each
+    event dir once it has finished drawing it, so 0 means the panel is done.
+    Only complete events count (READY written): a push cut off half way
+    (the PC stopped mid-send) leaves a dir the viewer never draws or
+    deletes, which would otherwise keep this from ever reaching 0."""
+    out = ssh(f"ls -1 {app_dir}/events/*/READY 2>/dev/null | wc -l", host)
     return int(out.stdout.strip() or 0)
 
 
