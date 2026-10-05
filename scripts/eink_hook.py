@@ -7,8 +7,9 @@ WebSocket/HTML path (touch_image_camera_new.py + plush_memory_camera.html)
 behaves exactly as before whether or not the tablet is reachable.
 
 Unlike the HTML's freely overlapping collage, images here go into fixed,
-non-overlapping slots (see SLOTS) on the Paper Pro panel's native
-1620x2160 resolution. There is no rotation here either (unlike the HTML's
+non-overlapping slots (see LAYOUTS) on the Paper Pro panel's native
+resolution, 1620x2160 held upright or 2160x1620 turned on its side. There
+is no per-image rotation here either (unlike the HTML's
 random `rotate(...)`) — the e-ink viewer only does axis-aligned partial
 updates, so stages stay unrotated rectangles. Likewise HIDE_IMAGE /
 HIDE_IMAGE_ALL are intentionally not mirrored: e-ink doesn't flicker, so a
@@ -36,35 +37,59 @@ import memory_text
 
 ENABLED = True
 
-SCREEN_W, SCREEN_H = 1620, 2160
-
-
-# Picture area (y 410-1870), between the memory text above and the
-# closing lines below. The latest image gets the
-# middle; around it, SLOTS are SLOT_PX boxes laid out so none of them
-# overlap each other or the latest one: four down each side, plus one above
-# and one below the middle. Images are fit inside their box (width and
-# height), so even a tall cutout stays in its slot.
+# The page is laid out for whichever way the tablet is turned when the touch
+# starts (the viewer reports it — see eink_memory_push.read_orientation),
+# and the whole page keeps that layout; the viewer only applies a rotation
+# between pages.
+#
+# Picture area between the memory text above and the closing lines below.
+# The latest image gets the middle; around it, SLOTS are SLOT_PX boxes laid
+# out so none of them overlap each other or the latest one. Images are fit
+# inside their box (width and height), so even a tall cutout stays in its
+# slot.
+#
+# Picture-book text: two fixed slots at eink_memory_push.TEXT_PX, the memory
+# (three sentences) above the pictures, this touch's closing lines (two)
+# below them. TEXT_W is wide enough that every sentence in
+# data/memory_texts.json, ja and en, fits on one line. Each slot is blanked
+# just before it's written, so the previous touch's text never shows
+# through when CLEAR_BEFORE_TOUCH is off.
 SLOT_PX = 320
 LATEST_PX = 520
-LATEST_CENTER = (810, 1140)
-SLOTS = (
-    [(185, y) for y in (570, 950, 1330, 1710)]
-    + [(1435, y) for y in (570, 950, 1330, 1710)]
-    + [(810, 570), (810, 1710)]
-)
 
-# Picture-book text. Two fixed slots at eink_memory_push.TEXT_PX: the
-# memory (three sentences) above the pictures, this touch's closing lines
-# (two) below them. TEXT_W is wide enough that every sentence
-# in data/memory_texts.json, ja and en, fits on one line.
-# Each slot is blanked just before it's written, so the previous touch's
-# text never shows through when CLEAR_BEFORE_TOUCH is off.
-TEXT_X, TEXT_W = 70, 1480
-MEMORY_TEXT_Y = 60
-TOUCH_LINE_Y = 1920
-_MEMORY_SLOT = (TEXT_X - 20, MEMORY_TEXT_Y - 20, TEXT_W + 40, 350)
-_TOUCH_SLOT = (TEXT_X - 20, TOUCH_LINE_Y - 20, TEXT_W + 40, SCREEN_H - TOUCH_LINE_Y + 20)
+
+class Layout:
+    def __init__(self, name, screen, latest_center, slots, text_x, text_w,
+                 memory_text_y, touch_line_y):
+        self.name = name
+        self.latest_center = latest_center
+        self.slots = slots
+        self.text_x, self.text_w = text_x, text_w
+        self.memory_text_y, self.touch_line_y = memory_text_y, touch_line_y
+        _, screen_h = screen
+        self.memory_slot = (text_x - 20, memory_text_y - 20, text_w + 40, 350)
+        self.touch_slot = (text_x - 20, touch_line_y - 20, text_w + 40, screen_h - touch_line_y + 20)
+
+
+LAYOUTS = {
+    # 1620x2160, pictures in y 410-1870: four down each side, plus one above
+    # and one below the middle.
+    "portrait": Layout(
+        "portrait", (1620, 2160), latest_center=(810, 1140),
+        slots=[(185, y) for y in (570, 950, 1330, 1710)]
+        + [(1435, y) for y in (570, 950, 1330, 1710)]
+        + [(810, 570), (810, 1710)],
+        text_x=70, text_w=1480, memory_text_y=60, touch_line_y=1920),
+    # 2160x1620, pictures in y 400-1380: two columns of three on each side.
+    "landscape": Layout(
+        "landscape", (2160, 1620), latest_center=(1080, 890),
+        slots=[(x, y) for x in (200, 540, 1620, 1960) for y in (560, 890, 1220)],
+        text_x=70, text_w=2020, memory_text_y=50, touch_line_y=1400),
+}
+
+# The layout of the page being drawn, set by show() once it has asked the
+# tablet which way it's turned.
+_layout = LAYOUTS["portrait"]
 
 # Slots not yet used on the current page, in the order they'll be handed
 # out. show() starts a fresh page; when they run out (many TMP_IMAGEs during
@@ -79,7 +104,7 @@ def _reading_order(slots):
 
 def _next_slot():
     if not _free_slots:
-        _free_slots.extend(_reading_order(SLOTS))
+        _free_slots.extend(_reading_order(_layout.slots))
     return _free_slots.pop(0)
 
 
@@ -94,23 +119,27 @@ _queue = None
 _seq = 0
 
 
-def _enqueue(make_push):
-    """Queue `make_push` (an async callable taking the event id) behind
-    everything already queued."""
+def _enqueue(job):
+    """Queue `job` (an async callable) behind everything already queued."""
     global _queue
     if _queue is None:
         _queue = asyncio.Queue()
         asyncio.get_event_loop().create_task(_run_queue())
-    _queue.put_nowait(make_push)
+    _queue.put_nowait(job)
 
 
 async def _run_queue():
-    global _seq
     while True:
-        make_push = await _queue.get()
-        _seq += 1
-        # Ids sort in push order — the viewer picks up events by name.
-        await make_push(f"{int(time.time() * 1000):013d}_{_seq:05d}")
+        job = await _queue.get()
+        await job()
+
+
+def _event_id():
+    """Ids sort in push order — the viewer picks up events by name."""
+    global _seq
+    _seq += 1
+    return f"{int(time.time() * 1000):013d}_{_seq:05d}"
+
 
 # A touch is only taken while no page is being drawn: from begin_page() (the
 # touch is accepted) until end_page()'s turn in the queue comes and the
@@ -120,6 +149,19 @@ async def _run_queue():
 DRAIN_POLL_SEC = 1.0
 DRAIN_TIMEOUT_SEC = 300.0
 _busy = False
+
+
+def set_device_orientation(orientation: str):
+    """Pass ~eink_orientation on to the viewer (eink_memory_push.
+    write_orientation_conf). Pages are still laid out by what the viewer
+    reports back, so a tablet that can't be reached just keeps its last
+    setting."""
+    try:
+        eink_memory_push.write_orientation_conf(orientation)
+    except ValueError as e:
+        rospy.logerr(f"eink_hook: {e}")
+    except Exception as e:
+        rospy.logwarn(f"eink_hook: could not set tablet orientation ({e})")
 
 
 def busy():
@@ -137,7 +179,16 @@ def end_page():
     stays busy until those pushes land and the tablet has drawn them."""
     if not ENABLED:
         return
-    _enqueue(lambda eid: _wait_drained())
+    _enqueue(_finish_page)
+
+
+async def _finish_page():
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, eink_memory_push.push_page_end, _event_id())
+    except Exception as e:
+        rospy.logwarn(f"eink_hook: page-end push failed: {e}")
+    await _wait_drained()
 
 
 async def _wait_drained():
@@ -189,7 +240,8 @@ def _image_path(kind: str, img_id):
     return None
 
 
-async def _push(kind: str, img_id, center, size: int, event_id: str):
+async def _push(kind: str, img_id, center, size: int):
+    event_id = _event_id()
     path = _image_path(kind, img_id)
     if path is None:
         return
@@ -203,20 +255,22 @@ async def _push(kind: str, img_id, center, size: int, event_id: str):
         await loop.run_in_executor(
             None, lambda: eink_memory_push.push_memory(
                 path, cx, cy, size, f"{event_id}_{kind}_{img_id}",
-                max_h=size, clear_rect=_box(center, size)))
+                max_h=size, clear_rect=_box(center, size), layout=_layout.name))
     except Exception as e:
         rospy.logwarn(f"eink_hook: push failed for {event_id}: {e}")
 
 
-async def _push_text(paragraphs, y, slot, event_id, clear_first=False):
+async def _push_text(paragraphs, y, slot, clear_first=False, page_start=False):
     if not paragraphs:
         return
+    event_id = _event_id()
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(
             None, lambda: eink_memory_push.push_text(
-                paragraphs, TEXT_X, y, TEXT_W, event_id=f"{event_id}_text",
-                clear_first=clear_first, clear_rect=slot))
+                paragraphs, _layout.text_x, y, _layout.text_w, event_id=f"{event_id}_text",
+                clear_first=clear_first, clear_rect=slot, layout=_layout.name,
+                page_start=page_start))
     except Exception as e:
         rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
 
@@ -235,21 +289,32 @@ def show(kind: str, selected_ids):
     if not ENABLED:
         return
     ids = selected_ids[:8]
-    chosen = random.sample(SLOTS, len(ids))
-    _free_slots[:] = _reading_order(c for c in SLOTS if c not in chosen)
     paragraphs = memory_text.memory_paragraphs(kind)
-    _enqueue(lambda eid: _push_text(paragraphs, MEMORY_TEXT_Y, _MEMORY_SLOT, eid,
-                                    clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH))
-    for img_id, slot in zip(ids, _reading_order(chosen)):
-        _enqueue(lambda eid, i=img_id, c=slot: _push(kind, i, c, SLOT_PX, eid))
+
+    async def start_page():
+        global _layout
+        loop = asyncio.get_event_loop()
+        try:
+            orientation = await loop.run_in_executor(None, eink_memory_push.read_orientation)
+        except Exception as e:
+            rospy.logwarn(f"eink_hook: could not read tablet orientation ({e}); assuming portrait")
+            orientation = "portrait"
+        _layout = LAYOUTS[orientation]
+        chosen = random.sample(_layout.slots, len(ids))
+        _free_slots[:] = _reading_order(c for c in _layout.slots if c not in chosen)
+        await _push_text(paragraphs, _layout.memory_text_y, _layout.memory_slot,
+                         clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH, page_start=True)
+        for img_id, slot in zip(ids, _reading_order(chosen)):
+            await _push(kind, img_id, slot, SLOT_PX)
+
+    _enqueue(start_page)
 
 
 def tmp(kind: str, img_id):
     """Mirror a TMP_IMAGE broadcast: one image in the next free slot."""
     if not ENABLED:
         return
-    slot = _next_slot()
-    _enqueue(lambda eid: _push(kind, img_id, slot, SLOT_PX, eid))
+    _enqueue(lambda: _push(kind, img_id, _next_slot(), SLOT_PX))
 
 
 def append_latest(kind: str, img_id):
@@ -259,5 +324,5 @@ def append_latest(kind: str, img_id):
     if not ENABLED:
         return
     lines = memory_text.touch_line(kind)
-    _enqueue(lambda eid: _push(kind, img_id, LATEST_CENTER, LATEST_PX, eid))
-    _enqueue(lambda eid: _push_text(lines, TOUCH_LINE_Y, _TOUCH_SLOT, eid))
+    _enqueue(lambda: _push(kind, img_id, _layout.latest_center, LATEST_PX))
+    _enqueue(lambda: _push_text(lines, _layout.touch_line_y, _layout.touch_slot))

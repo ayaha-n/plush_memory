@@ -365,6 +365,13 @@ async def main():
     eink_hook.ENABLED = (display_target == "eink")
     rospy.loginfo(f"display_target = {display_target} (image_style = {IMAGE_STYLE}, eink_hook.ENABLED = {eink_hook.ENABLED})")
 
+    # How the e-ink tablet is set down: portrait, landscape_cw or
+    # landscape_ccw (see eink_memory_push.write_orientation_conf).
+    if eink_hook.ENABLED:
+        eink_orientation = rospy.get_param("~eink_orientation", "portrait")
+        rospy.loginfo(f"eink_orientation = {eink_orientation}")
+        eink_hook.set_device_orientation(eink_orientation)
+
     # Language of the picture-book text written on the e-ink page.
     memory_text.LANG = rospy.get_param("~text_lang", "ja")
     rospy.loginfo(f"text_lang = {memory_text.LANG}")

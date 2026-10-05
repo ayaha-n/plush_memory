@@ -37,6 +37,7 @@ rosrun plush_memory touch_image_camera_new.py _display_target:=eink _enable_gene
 
 - `_enable_generation:=False` skips new generation and uses existing images only (useful for testing without a camera attached): up to 9 are picked, and the last one takes the "latest" spot in the middle.
 - `_text_lang:=en` switches the e-ink page's text to English (default `ja`).
+- `_eink_orientation:=landscape_cw` (or `landscape_ccw`) lays the e-ink page out sideways, for a tablet set down a quarter turn clockwise (or counterclockwise) from upright; default `portrait`. See [Turning the tablet sideways](#turning-the-tablet-sideways).
 - Image generation needs the `OPENAI_API_KEY` environment variable (`scripts/illustration_and_combine_new.py`, using the `gpt-image-1` image-edit API).
 
 ### Viewing the HTML version
@@ -92,6 +93,42 @@ The wireless route won't work when:
 - the tablet's OS was updated and the Tailscale setup hasn't been redone.
 
 In those cases, fall back to the USB cable (unset `EINK_HOST`). Networks that block Tailscale's direct UDP traffic still work, just via a relay with higher latency.
+
+### Turning the tablet sideways
+
+The viewer draws on a canvas the shape of the panel as the reader sees it
+(1620x2160 upright, 2160x1620 sideways) and copies it out turned to match,
+and the PC side lays each page out for whichever shape the viewer reports
+(`orientation` in the app's directory). How far round to turn comes from two
+sources that add up:
+
+- **`_eink_orientation`** (written to `orientation.conf` on the tablet): how
+  the tablet itself is set down. Use this with **xochitl's auto-rotate
+  turned off** in the tablet's settings, so xochitl's own screen stays
+  upright while the tablet lies on its side. `landscape_cw` is turned a
+  quarter turn clockwise from upright (its top edge to the right),
+  `landscape_ccw` counterclockwise; if the page comes out upside down, use
+  the other one.
+- **The rotation AppLoad paints the window with**. With AppLoad v0.6.0 or
+  later, `"supportsRotation": true` in `external.manifest.json` makes
+  AppLoad turn the window with xochitl's auto-rotate and tell the viewer,
+  so leave `_eink_orientation` at `portrait` and let the tablet rotate by
+  itself. (Fullscreen only — a windowed app turns with its title-bar
+  button instead.)
+
+Older AppLoad (v0.5.x — the one for firmware 3.27; v0.6.0 targets 3.28+)
+has no rotation support: it ignores `supportsRotation`, never reports a
+rotation, and always shows an app in a portrait-shaped area, so with
+auto-rotate on, a sideways tablet gets the page shrunk to the middle with
+blank bars left and right. Hence `_eink_orientation` with auto-rotate off.
+Both paths are kept so that updating AppLoad (and the firmware) later needs
+no viewer change.
+
+Either change is only applied while the panel is at rest: a page being
+drawn when the tablet turns (or `orientation.conf` changes) is finished the
+old way round, then the panel is blanked and the next touch's page is laid
+out for the new orientation. `orientation.conf` is re-read while the viewer
+runs, so changing `_eink_orientation` needs no app restart.
 
 ### How the e-ink reveal avoids flashing/ghosting
 

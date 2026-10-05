@@ -23,6 +23,18 @@ pub const MESSAGE_TERMINATE: u8 = 3;
 pub const MESSAGE_USERINPUT: u8 = 4;
 pub const MESSAGE_SET_REFRESH_MODE: u8 = 5;
 pub const MESSAGE_REQUEST_FULL_REFRESH: u8 = 6;
+pub const MESSAGE_DEVICE_STATE_CHANGED: u8 = 7;
+pub const MESSAGE_DEVICE_STATE_INIT: u8 = 8;
+
+// Device state (server -> client), for apps whose manifest sets
+// "supportsRotation": AppLoad then paints the framebuffer turned by this
+// much (Qt painter rotate: L90 = -90deg, R90 = +90deg), and the app is
+// expected to draw its content counter-rotated.
+pub const STATE_CHANGED_REASON_ROTATION: i32 = 0;
+pub const ROTATION_0: i32 = 0;
+pub const ROTATION_L90: i32 = 1;
+pub const ROTATION_R90: i32 = 2;
+pub const ROTATION_180: i32 = 3;
 
 pub const UPDATE_ALL: i32 = 0;
 pub const UPDATE_PARTIAL: i32 = 1;
@@ -44,6 +56,13 @@ pub const INPUT_VKB_PRESS: i32 = 0x40;
 pub const INPUT_VKB_RELEASE: i32 = 0x41;
 
 const SOCKET_PATH: &str = "/tmp/qtfb.sock";
+
+#[derive(Debug, Clone, Copy)]
+pub enum ServerEvent {
+    Input(InputEvent),
+    /// One of ROTATION_*; sent once right after init, then on every change.
+    Rotation(i32),
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct InputEvent {
@@ -219,9 +238,9 @@ impl QtfbClient {
         let _ = self.send_msg(&msg);
     }
 
-    /// Drain pending server messages. Returns input events, or Err on
-    /// disconnect (window closed -> we must exit).
-    pub fn drain_events(&self) -> io::Result<Vec<InputEvent>> {
+    /// Drain pending server messages. Returns input/rotation events, or Err
+    /// on disconnect (window closed -> we must exit).
+    pub fn drain_events(&self) -> io::Result<Vec<ServerEvent>> {
         let mut out = Vec::new();
         loop {
             let mut buf = [0u8; 32];
@@ -243,13 +262,20 @@ impl QtfbClient {
                 return Err(e);
             }
             if buf[0] == MESSAGE_USERINPUT && n >= 28 {
-                out.push(InputEvent {
+                out.push(ServerEvent::Input(InputEvent {
                     input_type: i32::from_le_bytes(buf[8..12].try_into().unwrap()),
                     dev_id: i32::from_le_bytes(buf[12..16].try_into().unwrap()),
                     x: i32::from_le_bytes(buf[16..20].try_into().unwrap()),
                     y: i32::from_le_bytes(buf[20..24].try_into().unwrap()),
                     d: i32::from_le_bytes(buf[24..28].try_into().unwrap()),
-                });
+                }));
+            }
+            // DeviceStateChangedContents: reason i32 @8, rotation i32 @12.
+            if (buf[0] == MESSAGE_DEVICE_STATE_CHANGED || buf[0] == MESSAGE_DEVICE_STATE_INIT)
+                && n >= 16
+                && i32::from_le_bytes(buf[8..12].try_into().unwrap()) == STATE_CHANGED_REASON_ROTATION
+            {
+                out.push(ServerEvent::Rotation(i32::from_le_bytes(buf[12..16].try_into().unwrap())));
             }
         }
     }

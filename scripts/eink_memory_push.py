@@ -45,6 +45,13 @@ EINK_HOST = os.environ.get("EINK_HOST", "10.11.99.1")
 EINK_APP_DIR = "/home/root/xovi/exthome/appload/plush_memory_viewer"
 
 SCREEN_W, SCREEN_H = 1620, 2160
+# Written by the viewer: "portrait" or "landscape", the way the tablet is
+# turned right now (the viewer only switches between pages — see main.rs).
+ORIENTATION_FILE = f"{EINK_APP_DIR}/orientation"
+# Read by the viewer: how the tablet itself is set down — see
+# write_orientation_conf().
+ORIENTATION_CONF = f"{EINK_APP_DIR}/orientation.conf"
+DEVICE_ORIENTATIONS = ("portrait", "landscape_cw", "landscape_ccw")
 BG = (255, 255, 255)  # pure white — e-ink only, not the HTML display's #fefaf5
                        # (plush_memory_camera.html is untouched by this file).
                        # Keeping this the same white the binarized reveal
@@ -229,7 +236,7 @@ def _slice_bands(img, out_dir):
 
 def push_memory(image_path, cx, cy, target_w=360, event_id=None,
                  clear_first=False, settle_after=False, host=EINK_HOST,
-                 max_h=None, clear_rect=None):
+                 max_h=None, clear_rect=None, layout=None):
     """Composite `image_path` and push a two-phase reveal to the tablet over
     SSH, centered at (cx, cy): first a binarized (pure black/white) version
     tile by tile — see the module docstring for why — then, in one final
@@ -253,6 +260,10 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
     `max_h` caps the height too, so the image fits a target_w x max_h box.
     `clear_rect` (x, y, w, h) blanks that area to BG first, in one partial
     update — for reusing a spot another image already occupies.
+
+    `layout` ("portrait"/"landscape") is the orientation the coordinates
+    were laid out for; the viewer skips the event if the tablet has since
+    been turned the other way.
 
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
@@ -291,34 +302,17 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
                              # clear_first flash reveals — the viewer no
                              # longer hardcodes its own copy of this
             "stages": stages,
+            "layout": layout,
         }
-        manifest_path = os.path.join(tmp, "manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f)
-
-        remote_dir = f"{EINK_APP_DIR}/events/{event_id}"
-        subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"], check=True)
-        subprocess.run(
-            [
-                "scp",
-                "-q",
-                *[os.path.join(tmp, fname) for *_, fname in reveal],
-                os.path.join(tmp, color_fname),
-                *extra,
-                manifest_path,
-                f"root@{host}:{remote_dir}/",
-            ],
-            check=True,
-        )
-        # READY last and separately: the viewer only picks up a dir once this
-        # file exists, so the manifest/frames above are always complete first.
-        subprocess.run(["ssh", f"root@{host}", f"touch {remote_dir}/READY"], check=True)
+        _send_event(event_id, manifest, tmp,
+                    [os.path.join(tmp, fname) for *_, fname in reveal]
+                    + [os.path.join(tmp, color_fname), *extra], host)
 
     return event_id
 
 
 def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
-              clear_rect=None, host=EINK_HOST):
+              clear_rect=None, host=EINK_HOST, layout=None, page_start=False):
     """Have the viewer write `paragraphs` by hand (stroke by stroke, the
     riddle way — see eink-viewer/src/ink.rs) into a box `w` px wide whose
     top-left is (x, y). The viewer stacks paragraphs with TEXT_PARAGRAPH_GAP
@@ -329,6 +323,10 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     `clear_rect` (x, y, w, h) blanks that area to BG first, in one partial
     update, so text left there by an earlier touch doesn't show through.
 
+    `layout`: as in push_memory. `page_start` marks the first event of a
+    touch's page — from here until push_page_end() the viewer holds off
+    applying a rotation.
+
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
     stages = [{"x": x, "w": w, "text": text, "px": px, "gap": TEXT_PARAGRAPH_GAP,
@@ -338,7 +336,8 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     stages[0]["y"] = y  # later paragraphs continue below, laid out by the viewer
     stages[-1]["hold_ms"] = 0
     manifest = {"clear_first": clear_first, "clear_hold_ms": CLEAR_HOLD_MS,
-                "bg": list(BG), "stages": stages}
+                "bg": list(BG), "stages": stages, "layout": layout,
+                "page_start": page_start}
 
     with tempfile.TemporaryDirectory() as tmp:
         files = []
@@ -348,14 +347,51 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
             Image.new("RGB", (cw, ch), BG).save(blank)
             files.append(blank)
             stages.insert(0, {"x": cx, "y": cy, "image": "blank.png", "hold_ms": 0})
-        manifest_path = os.path.join(tmp, "manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, ensure_ascii=False)
-        remote_dir = f"{EINK_APP_DIR}/events/{event_id}"
-        subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"], check=True)
-        subprocess.run(["scp", "-q", *files, manifest_path, f"root@{host}:{remote_dir}/"], check=True)
-        subprocess.run(["ssh", f"root@{host}", f"touch {remote_dir}/READY"], check=True)
+        _send_event(event_id, manifest, tmp, files, host)
     return event_id
+
+
+def push_page_end(event_id, host=EINK_HOST):
+    """An event with nothing to draw, marking that the touch's page is
+    complete: the viewer may apply a pending rotation once it's done."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _send_event(event_id, {"stages": [], "page_end": True}, tmp, [], host)
+    return event_id
+
+
+def _send_event(event_id, manifest, tmp, files, host):
+    manifest_path = os.path.join(tmp, "manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(manifest, f, ensure_ascii=False)
+    remote_dir = f"{EINK_APP_DIR}/events/{event_id}"
+    subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"], check=True)
+    subprocess.run(["scp", "-q", *files, manifest_path, f"root@{host}:{remote_dir}/"], check=True)
+    # READY last and separately: the viewer only picks up a dir once this
+    # file exists, so the manifest/frames above are always complete first.
+    subprocess.run(["ssh", f"root@{host}", f"touch {remote_dir}/READY"], check=True)
+
+
+def write_orientation_conf(orientation, host=EINK_HOST):
+    """Tell the viewer how the tablet is set down: "portrait", or turned on
+    its side a quarter turn clockwise ("landscape_cw") or counterclockwise
+    ("landscape_ccw"), with xochitl's auto-rotate off so its own screen
+    stays upright. The viewer then draws the page turned to match, filling
+    the whole panel. It picks this up while running, between pages."""
+    if orientation not in DEVICE_ORIENTATIONS:
+        raise ValueError(f"orientation must be one of {DEVICE_ORIENTATIONS}, not {orientation!r}")
+    subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}",
+         f"echo {orientation} > {ORIENTATION_CONF}"],
+        check=True)
+
+
+def read_orientation(host=EINK_HOST):
+    """"portrait" or "landscape" as the viewer last reported it; portrait if
+    the file isn't there (a viewer from before rotation support)."""
+    out = subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}", f"cat {ORIENTATION_FILE} 2>/dev/null || true"],
+        check=True, capture_output=True, text=True)
+    return "landscape" if out.stdout.strip() == "landscape" else "portrait"
 
 
 def pending_events(host=EINK_HOST):
