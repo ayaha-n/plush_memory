@@ -155,6 +155,7 @@ def _event_id():
 # pages nobody asked for.
 DRAIN_POLL_SEC = 1.0
 DRAIN_TIMEOUT_SEC = 300.0
+TOUCH_CLEAR_HOLD_MS = 2000  # Let the blank settle before writing over a cover.
 _busy = False
 
 
@@ -279,7 +280,9 @@ async def _push_text(paragraphs, y, slot, clear_first=False, page_start=False):
             None, lambda: eink_memory_push.push_text(
                 paragraphs, _layout.text_x, y, _layout.text_w, event_id=f"{event_id}_text",
                 clear_first=clear_first, clear_rect=slot, layout=_layout.name,
-                page_start=page_start))
+                page_start=page_start,
+                clear_hold_ms=(TOUCH_CLEAR_HOLD_MS if clear_first
+                               else eink_memory_push.CLEAR_HOLD_MS)))
     except Exception as e:
         rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
 
