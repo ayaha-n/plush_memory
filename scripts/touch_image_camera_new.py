@@ -10,6 +10,7 @@ import sys
 import time
 import random
 import draw_on_touch
+import eink_health
 import eink_hook
 import memory_text
 
@@ -371,6 +372,9 @@ async def main():
         eink_orientation = rospy.get_param("~eink_orientation", "portrait")
         rospy.loginfo(f"eink_orientation = {eink_orientation}")
         eink_hook.set_device_orientation(eink_orientation)
+        eink_health.check_startup(
+            eink_orientation,
+            clear_events=rospy.get_param("~eink_clear_stale_events", False))
         eink_hook.start_idle_timer()
 
     # Language of the picture-book text written on the e-ink page.
