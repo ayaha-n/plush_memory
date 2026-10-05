@@ -4,7 +4,6 @@ import os
 import time
 import subprocess
 
-from PIL import Image
 import rospy
 from std_msgs.msg import Bool
 import illustration_and_combine_new
@@ -14,8 +13,6 @@ PARTS = ["larm", "rarm", "lleg", "rleg", "head", "stomach"]
 
 path_to_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images"
 path_to_raw_dir = "/home/leus/ros/catkin_ws/src/plush_memory/data/images/raw_picture"
-bear_image_path = os.path.join(path_to_dir, "yellow_bear.png")
-bear_flipped_image_path = os.path.join(path_to_dir, "yellow_bear_flipped.png")
 edit_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT_EDIT")
 api_key = os.getenv("AZURE_API_KEY")
 
@@ -85,17 +82,8 @@ def save_picture_and_draw(label, style: str = "shepard"):
     #generate combined_image (if it doesn't exist)
     if not os.path.exists(combined_image):
         if label == "larm":
-            img1 = Image.open(bear_flipped_image_path)
             rospy.loginfo("use flipped image")
-        else:
-            img1 = Image.open(bear_image_path)
-        img2 = Image.open(person_drawing)
-        combined_width = img1.width + img2.width
-        combined_height = max(img1.height, img2.height)
-        combined_img = Image.new('RGBA', (combined_width, combined_height))
-        combined_img.paste(img1, (0, 0))
-        combined_img.paste(img2, (img1.width, 0))
-        combined_img.save(combined_image)
+        illustration_and_combine_new.combine_with_bear(person_drawing, label).save(combined_image)
         print(f"Saved combined image: {combined_image}")
 
     # generate final image, in whichever style this node was launched with
@@ -105,19 +93,9 @@ def save_picture_and_draw(label, style: str = "shepard"):
     # fallback/memory lookups (which just scan by filename pattern) never
     # cross-pick an image generated in a different style on some earlier
     # day this node ran with a different ~display_target.
-    style_dir = os.path.join(path_to_dir, style)
-    os.makedirs(style_dir, exist_ok=True)
-    output_path = os.path.join(style_dir, f"generated_drawing_{pid_str}_{label}.png")
-    if not os.path.exists(output_path):
-        success = illustration_and_combine_new.save_image_from_api(
-            illustration_and_combine_new.prompt_for(label, style),
-            combined_image, output_path, transparent=(style != "classic"),
-        )
-        if not success or not os.path.exists(output_path):
-            rospy.logwarn("Failed to generate final image for pid=%s label=%s", pid_str, label)
-            return (None, pid_int)
-    else:
-        print(f"Already exists: {output_path}")
+    if illustration_and_combine_new.generate_styled(combined_image, pid_str, label, style) is None:
+        rospy.logwarn("Failed to generate final image for pid=%s label=%s", pid_str, label)
+        return (None, pid_int)
 
     return (pid_int, pid_int)
 

@@ -135,6 +135,40 @@ def save_image_from_api(prompt, image_path, output_path, transparent=True):
         print(response.text)
         return False
 
+def combine_with_bear(person_drawing_path, label):
+    """The bear and the person side by side, the input for the final
+    illustration. larm gets the mirrored bear."""
+    bear = Image.open(bear_flipped_image_path if label == "larm" else bear_image_path)
+    person = Image.open(person_drawing_path)
+    combined = Image.new('RGBA', (bear.width + person.width, max(bear.height, person.height)))
+    combined.paste(bear, (0, 0))
+    combined.paste(person, (bear.width, 0))
+    return combined
+
+
+def styled_output_path(pid, label, style):
+    """data/images/<style>/generated_drawing_<pid>_<label>.png — filed by
+    style so lookups never cross-pick another style's image."""
+    return os.path.join(path_to_dir, style, f"generated_drawing_{pid}_{label}.png")
+
+
+def generate_styled(combined_image_path, pid, label, style):
+    """Generate the final illustration for `label` in `style` (skipped if it
+    already exists). Returns the output path, or None on failure."""
+    output_path = styled_output_path(pid, label, style)
+    if os.path.exists(output_path):
+        print(f"Already exists: {output_path}")
+        return output_path
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    success = save_image_from_api(
+        prompt_for(label, style), combined_image_path, output_path,
+        transparent=(style != "classic"),
+    )
+    if not success or not os.path.exists(output_path):
+        return None
+    return output_path
+
+
 if __name__ == "__main__":
 
     participant_ids = get_participant_ids()
