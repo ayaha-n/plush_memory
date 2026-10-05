@@ -208,8 +208,25 @@ the file and restart the node, no rebuild needed:
 | `BW_THRESHOLD` | Luminance cutoff for binarizing the reveal |
 | `BG` | Background color — the *only* place it's set; `eink-viewer` reads it from the manifest instead of hardcoding its own copy |
 | `CLEAR_BEFORE_TOUCH` | Whether a new touch blanks the panel to background before its page starts (on by default; only the touch's first event ever sets this, so toggling it doesn't cause more than one blank) |
-| `CLEAR_HOLD_MS` | Pause after that blank before anything is drawn — without it, the handwriting starting right away let the previous page ghost through |
+| `CLEAR_HOLD_MS` | Pause after that blank before anything is drawn — without it, the handwriting starting right away let the previous page ghost through. The default; a caller can pass `clear_hold_ms=` to `push_memory`/`push_text` for an event that needs longer |
 | `TEXT_POINTS_PER_STEP` / `TEXT_STEP_MS` | Handwriting pace: pen points per partial update, and ms between updates |
+
+### Reusing the viewer in another app
+
+`eink-viewer/` is also a library: `src/viewer.rs` is the whole engine (the
+event protocol, handwriting, rotation), and `src/main.rs` is just
+plush_memory's app on top of it, adding nothing. Another AppLoad app can
+depend on the crate by path, call `viewer::run(name, &mut hooks)`, and add
+its own behavior through `viewer::Hooks` (touch input, and each event's
+start and end, with its whole manifest). The narrative chatbot's picture
+book does this (`jsk_demos/2026_07_narrative_chatbot/storybook_viewer/`) to
+let the finished book be paged through by tapping.
+
+On the PC side, the push functions take `app_dir=` (which AppLoad app the
+event goes to; `pending_events`, `read_orientation` and
+`write_orientation_conf` too) and `extra=` (more manifest keys, for such an
+app's hooks; the viewer itself ignores them). Both default to
+plush_memory's own app and nothing extra.
 
 ## Picture-book text
 
@@ -264,7 +281,7 @@ data/images/
 | `scripts/eink_memory_push.py` | Turns a generated image into staged materialize frames for e-ink, or a text into a handwriting event, and pushes them to the tablet over SSH |
 | `scripts/memory_text.py` | Picks the picture-book text for a touch from `data/memory_texts.json` |
 | `data/memory_texts.json` | The picture-book text, per part, in Japanese and English |
-| `eink-viewer/` | Rust AppLoad app running on the tablet; runs events in order — blits image frames and writes text stroke by stroke, via partial refresh |
+| `eink-viewer/` | Rust AppLoad app running on the tablet; runs events in order — blits image frames and writes text stroke by stroke, via partial refresh. Also a library other apps can build on (see "Reusing the viewer in another app") |
 | `plush_memory_camera.html` | The HTML display page |
 
 ## Dependencies and credits
