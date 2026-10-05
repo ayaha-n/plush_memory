@@ -10,7 +10,8 @@ use ab_glyph::FontRef;
 
 pub const FONT_TTF: &[u8] = include_bytes!("../fonts/Yomogi-Regular.ttf");
 
-/// Pen radius in px — riddle's 2 reads as a fine nib at this panel density.
+/// Default pen radius in px — riddle's 2 reads as a fine nib at this panel
+/// density. A text stage can ask for a broader one (a cover's title).
 pub const PEN_R: i32 = 2;
 /// Default points drawn per partial update, and the pause between updates —
 /// the pacing riddle uses for Tom's live replies (26 points / 14ms). A text
@@ -30,13 +31,15 @@ const SUPERSAMPLE: f32 = 3.0;
 
 /// Screen-space strokes for `text`, word-wrapped into a box `w` wide whose
 /// top-left is (x, y). Lines are left-aligned, like a picture book's text
-/// block. Returns the strokes plus the y just below the last line.
-pub fn plan(font: &FontRef, text: &str, x: i32, y: i32, w: i32, px: f32) -> (Vec<Vec<(i32, i32)>>, i32) {
+/// block, or centered in the box (a cover's title). Returns the strokes plus
+/// the y just below the last line.
+pub fn plan(font: &FontRef, text: &str, x: i32, y: i32, w: i32, px: f32, center: bool) -> (Vec<Vec<(i32, i32)>>, i32) {
     let lines = script::wrap(font, text, px, w as f32);
     let line_h = (px * LINE_SPACING) as i32;
     let mut strokes = Vec::new();
     let mut cy = y;
     for line_text in &lines {
+        let x = if center { x + ((w as f32 - script::measure(font, line_text, px)) / 2.0).max(0.0) as i32 } else { x };
         let mut raster = script::rasterize_line(font, line_text, px * SUPERSAMPLE);
         dilate(&mut raster);
         script::thin(&mut raster);
@@ -107,17 +110,19 @@ impl Dirty {
     }
 }
 
-/// Walks a stroke plan, drawing up to `points_per_step` points per call.
+/// Walks a stroke plan, drawing up to `points_per_step` points per call
+/// with a round nib `pen_r` px in radius.
 pub struct Writer {
     strokes: Vec<Vec<(i32, i32)>>,
     stroke_i: usize,
     point_i: usize,
     points_per_step: usize,
+    pen_r: i32,
 }
 
 impl Writer {
-    pub fn new(strokes: Vec<Vec<(i32, i32)>>, points_per_step: usize) -> Self {
-        Writer { strokes, stroke_i: 0, point_i: 0, points_per_step: points_per_step.max(1) }
+    pub fn new(strokes: Vec<Vec<(i32, i32)>>, points_per_step: usize, pen_r: i32) -> Self {
+        Writer { strokes, stroke_i: 0, point_i: 0, points_per_step: points_per_step.max(1), pen_r: pen_r.max(1) }
     }
 
     pub fn done(&self) -> bool {
@@ -139,11 +144,11 @@ impl Writer {
             let (x, y) = stroke[self.point_i];
             if self.point_i > 0 {
                 let (px, py) = stroke[self.point_i - 1];
-                brush_line(fb, screen_w, screen_h, px, py, x, y);
+                brush_line(fb, screen_w, screen_h, self.pen_r, px, py, x, y);
             } else {
-                stamp(fb, screen_w, screen_h, x, y);
+                stamp(fb, screen_w, screen_h, self.pen_r, x, y);
             }
-            dirty.add(x, y, PEN_R + 2);
+            dirty.add(x, y, self.pen_r + 2);
             self.point_i += 1;
             budget -= 1;
         }
@@ -160,8 +165,7 @@ fn put_black(fb: &mut [u8], screen_w: usize, screen_h: usize, x: i32, y: i32) {
 }
 
 // stamp/brush_line: same round-nib brush as riddle's src/surface.rs.
-fn stamp(fb: &mut [u8], sw: usize, sh: usize, cx: i32, cy: i32) {
-    let r = PEN_R;
+fn stamp(fb: &mut [u8], sw: usize, sh: usize, r: i32, cx: i32, cy: i32) {
     for dy in -r..=r {
         for dx in -r..=r {
             if dx * dx + dy * dy <= r * r {
@@ -171,9 +175,9 @@ fn stamp(fb: &mut [u8], sw: usize, sh: usize, cx: i32, cy: i32) {
     }
 }
 
-fn brush_line(fb: &mut [u8], sw: usize, sh: usize, x0: i32, y0: i32, x1: i32, y1: i32) {
+fn brush_line(fb: &mut [u8], sw: usize, sh: usize, r: i32, x0: i32, y0: i32, x1: i32, y1: i32) {
     let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
     for i in 0..=steps {
-        stamp(fb, sw, sh, x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
+        stamp(fb, sw, sh, r, x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps);
     }
 }

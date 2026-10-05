@@ -42,6 +42,11 @@ import time
 from PIL import Image
 
 EINK_HOST = os.environ.get("EINK_HOST", "10.11.99.1")
+# Every ssh/scp to the tablet: key auth only (never stop at a password
+# prompt) and bounded, so a dropped link can't hold up the event queue —
+# which a visitor's touch is waiting in — for more than one push.
+SSH_OPTS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+SSH_TIMEOUT_SEC = 60
 EINK_APP_DIR = "/home/root/xovi/exthome/appload/plush_memory_viewer"
 
 SCREEN_W, SCREEN_H = 1620, 2160
@@ -236,7 +241,7 @@ def _slice_bands(img, out_dir):
 
 def push_memory(image_path, cx, cy, target_w=360, event_id=None,
                  clear_first=False, settle_after=False, host=EINK_HOST,
-                 max_h=None, clear_rect=None, layout=None):
+                 max_h=None, clear_rect=None, layout=None, idle=False, page_start=False):
     """Composite `image_path` and push a two-phase reveal to the tablet over
     SSH, centered at (cx, cy): first a binarized (pure black/white) version
     tile by tile — see the module docstring for why — then, in one final
@@ -263,7 +268,9 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
 
     `layout` ("portrait"/"landscape") is the orientation the coordinates
     were laid out for; the viewer skips the event if the tablet has since
-    been turned the other way.
+    been turned the other way. `idle` marks part of the cover, which the
+    viewer drops as soon as a touch's page arrives. `page_start`: as in
+    push_text.
 
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
@@ -297,12 +304,15 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
 
         manifest = {
             "clear_first": clear_first,
+            "clear_hold_ms": CLEAR_HOLD_MS,
             "settle_after": settle_after,
             "bg": list(BG),  # single source of truth for the fill color a
                              # clear_first flash reveals — the viewer no
                              # longer hardcodes its own copy of this
             "stages": stages,
             "layout": layout,
+            "idle": idle,
+            "page_start": page_start,
         }
         _send_event(event_id, manifest, tmp,
                     [os.path.join(tmp, fname) for *_, fname in reveal]
@@ -312,7 +322,8 @@ def push_memory(image_path, cx, cy, target_w=360, event_id=None,
 
 
 def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
-              clear_rect=None, host=EINK_HOST, layout=None, page_start=False):
+              clear_rect=None, host=EINK_HOST, layout=None, page_start=False,
+              idle=False, align=None, pen_r=None, points_per_step=TEXT_POINTS_PER_STEP):
     """Have the viewer write `paragraphs` by hand (stroke by stroke, the
     riddle way — see eink-viewer/src/ink.rs) into a box `w` px wide whose
     top-left is (x, y). The viewer stacks paragraphs with TEXT_PARAGRAPH_GAP
@@ -323,21 +334,24 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     `clear_rect` (x, y, w, h) blanks that area to BG first, in one partial
     update, so text left there by an earlier touch doesn't show through.
 
-    `layout`: as in push_memory. `page_start` marks the first event of a
-    touch's page — from here until push_page_end() the viewer holds off
-    applying a rotation.
+    `layout`, `idle`: as in push_memory. `page_start` marks the first event
+    of a touch's page — from here until push_page_end() the viewer holds off
+    applying a rotation. `align="center"` centers each line in the box;
+    `pen_r` is the pen radius in px (the viewer's default otherwise);
+    `points_per_step` sets the writing pace.
 
     Returns the event id used."""
     event_id = event_id or str(int(time.time() * 1000))
     stages = [{"x": x, "w": w, "text": text, "px": px, "gap": TEXT_PARAGRAPH_GAP,
                "hold_ms": TEXT_PARAGRAPH_PAUSE_MS,
-               "points_per_step": TEXT_POINTS_PER_STEP, "step_ms": TEXT_STEP_MS}
+               "points_per_step": points_per_step, "step_ms": TEXT_STEP_MS,
+               "align": align, "pen_r": pen_r}
               for text in paragraphs]
     stages[0]["y"] = y  # later paragraphs continue below, laid out by the viewer
     stages[-1]["hold_ms"] = 0
     manifest = {"clear_first": clear_first, "clear_hold_ms": CLEAR_HOLD_MS,
                 "bg": list(BG), "stages": stages, "layout": layout,
-                "page_start": page_start}
+                "page_start": page_start, "idle": idle}
 
     with tempfile.TemporaryDirectory() as tmp:
         files = []
@@ -351,11 +365,12 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     return event_id
 
 
-def push_page_end(event_id, host=EINK_HOST):
-    """An event with nothing to draw, marking that the touch's page is
-    complete: the viewer may apply a pending rotation once it's done."""
+def push_page_end(event_id, host=EINK_HOST, idle=False):
+    """An event with nothing to draw, marking that the touch's page (or,
+    with `idle`, the cover) is complete: the viewer may apply a pending
+    rotation once it's done."""
     with tempfile.TemporaryDirectory() as tmp:
-        _send_event(event_id, {"stages": [], "page_end": True}, tmp, [], host)
+        _send_event(event_id, {"stages": [], "page_end": True, "idle": idle}, tmp, [], host)
     return event_id
 
 
@@ -364,11 +379,18 @@ def _send_event(event_id, manifest, tmp, files, host):
     with open(manifest_path, "w") as f:
         json.dump(manifest, f, ensure_ascii=False)
     remote_dir = f"{EINK_APP_DIR}/events/{event_id}"
-    subprocess.run(["ssh", f"root@{host}", f"mkdir -p {remote_dir}"], check=True)
-    subprocess.run(["scp", "-q", *files, manifest_path, f"root@{host}:{remote_dir}/"], check=True)
+    ssh(f"mkdir -p {remote_dir}", host)
+    subprocess.run(["scp", "-q", *SSH_OPTS, *files, manifest_path, f"root@{host}:{remote_dir}/"],
+                   check=True, timeout=SSH_TIMEOUT_SEC)
     # READY last and separately: the viewer only picks up a dir once this
     # file exists, so the manifest/frames above are always complete first.
-    subprocess.run(["ssh", f"root@{host}", f"touch {remote_dir}/READY"], check=True)
+    ssh(f"touch {remote_dir}/READY", host)
+
+
+def ssh(command, host=EINK_HOST, timeout=SSH_TIMEOUT_SEC):
+    """Run `command` on the tablet; raises if it fails or takes too long."""
+    return subprocess.run(["ssh", *SSH_OPTS, f"root@{host}", command],
+                          check=True, capture_output=True, text=True, timeout=timeout)
 
 
 def write_orientation_conf(orientation, host=EINK_HOST):
@@ -379,28 +401,20 @@ def write_orientation_conf(orientation, host=EINK_HOST):
     the whole panel. It picks this up while running, between pages."""
     if orientation not in DEVICE_ORIENTATIONS:
         raise ValueError(f"orientation must be one of {DEVICE_ORIENTATIONS}, not {orientation!r}")
-    subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}",
-         f"echo {orientation} > {ORIENTATION_CONF}"],
-        check=True)
+    ssh(f"echo {orientation} > {ORIENTATION_CONF}", host)
 
 
 def read_orientation(host=EINK_HOST):
     """"portrait" or "landscape" as the viewer last reported it; portrait if
     the file isn't there (a viewer from before rotation support)."""
-    out = subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}", f"cat {ORIENTATION_FILE} 2>/dev/null || true"],
-        check=True, capture_output=True, text=True)
+    out = ssh(f"cat {ORIENTATION_FILE} 2>/dev/null || true", host)
     return "landscape" if out.stdout.strip() == "landscape" else "portrait"
 
 
 def pending_events(host=EINK_HOST):
     """How many events are still on the tablet — the viewer deletes each
     event dir once it has finished drawing it, so 0 means the panel is done."""
-    out = subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}",
-         f"ls -1 {EINK_APP_DIR}/events 2>/dev/null | wc -l"],
-        check=True, capture_output=True, text=True)
+    out = ssh(f"ls -1 {EINK_APP_DIR}/events 2>/dev/null | wc -l", host)
     return int(out.stdout.strip() or 0)
 
 

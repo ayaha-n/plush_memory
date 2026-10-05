@@ -217,6 +217,12 @@ The handwriting itself happens on the tablet: the viewer rasterizes the text in 
 
 Page layout (`scripts/eink_hook.py`): the memory text at the top, the closing at the bottom, and between them images in fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — each image fit inside its box.
 
+### The cover
+
+When nobody has touched the plush for 20 seconds (`IDLE_COVER_SEC` in `scripts/eink_hook.py`), the e-ink page turns into a picture-book cover: the title 「ぬいぐるみの記憶」, a one-line premise, the bear shaking a hand (`data/cover/bear.png`) and a few lines saying what the work is and inviting a touch. Its text is `_cover` in `data/memory_texts.json` (`title` / `tagline` / `body`, `ja`/`en`; the body gets a line break after each 。).
+
+The cover always gives way: a touch is taken at once, its page doesn't wait for the cover, and the viewer drops whatever of the cover is left.
+
 ## Image data layout
 
 ```

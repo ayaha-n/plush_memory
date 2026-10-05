@@ -62,6 +62,10 @@ struct Manifest {
     page_start: bool,
     #[serde(default)]
     page_end: bool,
+    /// Drawn while nobody is touching (the cover): dropped, even half way
+    /// through, as soon as a touch's page arrives.
+    #[serde(default)]
+    idle: bool,
 }
 
 /// One step of an event. Untagged: a stage with `image` blits a PNG frame;
@@ -95,6 +99,12 @@ enum Stage {
         points_per_step: Option<usize>,
         #[serde(default)]
         step_ms: Option<u64>,
+        /// "center" centers each line in the box; otherwise left-aligned.
+        #[serde(default)]
+        align: Option<String>,
+        /// Pen radius in px (default ink::PEN_R).
+        #[serde(default)]
+        pen_r: Option<i32>,
     },
     /// Internal: Job queues this after the last stage when settle_after.
     #[serde(skip)]
@@ -156,7 +166,10 @@ fn main() {
     let mut appload_turns = 0;
     let mut conf_turns = read_orientation_conf(&orientation_conf_path);
     let mut in_page = false;
+    let mut in_page_is_cover = false;
     let mut last_busy = Instant::now();
+    // The latest touch's page seen so far (its first event's dir).
+    let mut newest_page: Option<PathBuf> = None;
 
     // Each READY event becomes a Job, queued in name order (the PC side
     // names them so that sorts in push order). Only the front job runs —
@@ -194,10 +207,32 @@ fn main() {
                     }
                 }
             }
+            // A touch's page has come in: stop the cover right where it is
+            // (the page's own clear_first blanks whatever of it was drawn),
+            // and drop any of it that turns up later — the PC side pushes
+            // the cover apart from pages, so a cover push already under way
+            // can land after the page. Event names sort by when they were
+            // made, and every cover event is named before the touch's page.
+            if let Some(page) = jobs.iter().filter(|j| !j.idle && j.page_start).map(|j| &j.dir).max() {
+                if newest_page.as_ref().map_or(true, |p| page > p) {
+                    newest_page = Some(page.clone());
+                }
+            }
+            if let Some(page) = &newest_page {
+                for j in jobs.iter_mut().filter(|j| j.idle && !j.finished && j.dir < *page) {
+                    j.finished = true;
+                    // A cut-short cover no longer holds back a rotation.
+                    if in_page_is_cover {
+                        in_page = false;
+                        in_page_is_cover = false;
+                    }
+                }
+            }
         }
 
         let now = Instant::now();
-        if let Some(job) = jobs.first_mut().filter(|j| j.next_at <= now) {
+        // (Not one that was just dropped: a cover a touch has cut short.)
+        if let Some(job) = jobs.first_mut().filter(|j| j.next_at <= now && !j.finished) {
             if let Some(layout) = job.layout.as_deref().filter(|&l| l != screen.layout()) {
                 eprintln!(
                     "plush_memory_viewer: event {:?} laid out {layout}, panel is {}; skipped",
@@ -206,7 +241,10 @@ fn main() {
                 );
                 job.finished = true;
             } else {
-                in_page |= std::mem::take(&mut job.page_start);
+                if std::mem::take(&mut job.page_start) {
+                    in_page = true;
+                    in_page_is_cover = job.idle;
+                }
                 if let Err(e) = job.step(&mut screen, &font) {
                     eprintln!("plush_memory_viewer: event {:?} failed: {e}", job.dir);
                     job.finished = true;
@@ -418,6 +456,7 @@ struct Job {
     layout: Option<String>,
     page_start: bool,
     page_end: bool,
+    idle: bool,
 }
 
 impl Job {
@@ -442,6 +481,7 @@ impl Job {
             layout: manifest.layout,
             page_start: manifest.page_start,
             page_end: manifest.page_end,
+            idle: manifest.idle,
         })
     }
 
@@ -497,11 +537,16 @@ impl Job {
                 screen.present(x, y, w as i32, h as i32);
                 self.next_at = now + Duration::from_millis(hold_ms);
             }
-            Some(Stage::Text { x, y, gap, w, text, px, hold_ms, points_per_step, step_ms }) => {
+            Some(Stage::Text { x, y, gap, w, text, px, hold_ms, points_per_step, step_ms, align, pen_r }) => {
                 let y = y.unwrap_or(self.text_bottom + (gap * px) as i32);
-                let (strokes, bottom) = ink::plan(font, &text, x, y, w, px);
+                let center = align.as_deref() == Some("center");
+                let (strokes, bottom) = ink::plan(font, &text, x, y, w, px, center);
                 self.text_bottom = bottom;
-                let writer = ink::Writer::new(strokes, points_per_step.unwrap_or(ink::POINTS_PER_STEP));
+                let writer = ink::Writer::new(
+                    strokes,
+                    points_per_step.unwrap_or(ink::POINTS_PER_STEP),
+                    pen_r.unwrap_or(ink::PEN_R),
+                );
                 self.writer = Some((writer, step_ms.unwrap_or(ink::STEP_MS), hold_ms));
                 self.next_at = now;
             }
@@ -631,7 +676,7 @@ fn preview(args: &[String]) {
     let mut y = 160;
     let mut strokes = Vec::new();
     for para in &args[3..] {
-        let (s, next_y) = ink::plan(&font, para, margin, y, w, px);
+        let (s, next_y) = ink::plan(&font, para, margin, y, w, px, false);
         strokes.extend(s);
         y = next_y + (px * 0.6) as i32;
     }
@@ -639,14 +684,14 @@ fn preview(args: &[String]) {
     let mut fb = vec![0xffu8; SCREEN_W * SCREEN_H * 2];
     let mut steps = 0;
     {
-        let mut counter = ink::Writer::new(strokes.clone(), ink::POINTS_PER_STEP);
+        let mut counter = ink::Writer::new(strokes.clone(), ink::POINTS_PER_STEP, ink::PEN_R);
         let mut scratch = fb.clone();
         while !counter.done() {
             counter.step(&mut scratch, SCREEN_W, SCREEN_H);
             steps += 1;
         }
     }
-    let mut writer = ink::Writer::new(strokes, ink::POINTS_PER_STEP);
+    let mut writer = ink::Writer::new(strokes, ink::POINTS_PER_STEP, ink::PEN_R);
     let mut i = 0;
     let mut shot = 1;
     while !writer.done() {

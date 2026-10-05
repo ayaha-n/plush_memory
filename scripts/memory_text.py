@@ -73,6 +73,16 @@ def touch_line(part, now=None, lang=None):
     return [line.format(**fields) for line in spec[lang]]
 
 
+def cover_texts(lang=None):
+    """The cover shown while nobody is touching: (title, tagline, [body
+    paragraphs]) from the JSON's "_cover". Each Japanese sentence of the
+    body gets a line of its own (a line break after every 。)."""
+    lang = lang or LANG
+    spec = _load()["_cover"]
+    body = [p[lang].replace("。", "。\n").strip() for p in spec["body"]]
+    return spec["title"][lang], spec["tagline"][lang], body
+
+
 if __name__ == "__main__":
     for p in ["head", "stomach", "larm", "rarm", "lleg", "rleg"]:
         for lang in ("ja", "en"):

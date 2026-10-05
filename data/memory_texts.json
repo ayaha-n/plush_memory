@@ -1,4 +1,28 @@
 {
+  "_cover": {
+    "title": {
+      "ja": "ぬいぐるみの記憶",
+      "en": "Memories of a Plush"
+    },
+    "tagline": {
+      "ja": "ぬいぐるみには、きおくが やどっている。",
+      "en": "A plush toy holds memories."
+    },
+    "body": [
+      {
+        "ja": "なでられて くせの ついた けなみ、てに なじんだ かんしょく。それは、だれかと すごした じかんの あと です。",
+        "en": "Fur that leans the way it was stroked, a feel grown familiar to the hand: traces of the time it spent with someone."
+      },
+      {
+        "ja": "ぬいぐるみに そっと ふれてみてください。これまでの きおくが、この ほんに うかびあがります。",
+        "en": "Touch the plush gently, and its memories will rise up on these pages."
+      },
+      {
+        "ja": "あなたが ふれた しゅんかんも、きおくとして きざまれます。",
+        "en": "The moment you touch it will be kept as a memory, too."
+      }
+    ]
+  },
   "_touch_line": {
     "ja": [
       "{year}ねん {month}がつ {day_ja}、あなたの てが {part_ja}に ふれました。",
