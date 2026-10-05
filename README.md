@@ -58,9 +58,10 @@ Building the viewer needs only a Rust toolchain ([rustup](https://rustup.rs/)) â
 ```bash
 rustup target add aarch64-unknown-linux-musl
 cd eink-viewer && cargo build --release --target aarch64-unknown-linux-musl
-scp target/aarch64-unknown-linux-musl/release/plush_memory_viewer \
+scp target/aarch64-unknown-linux-musl/release/plush_memory_viewer external.manifest.json icon.png \
     root@10.11.99.1:/home/root/xovi/exthome/appload/plush_memory_viewer/
-# then close and relaunch the app from AppLoad
+# then close and relaunch the app from AppLoad (after a manifest/icon change,
+# also press reload in the AppLoad list while no app is open)
 ```
 
 `cargo run --release -- --preview out 56 1480 "some text"` renders a text stage off-device into `out_1.png`â€¦`out_3.png` (progress snapshots), for checking layout without the tablet.
