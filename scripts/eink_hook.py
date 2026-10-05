@@ -112,6 +112,50 @@ async def _run_queue():
         # Ids sort in push order — the viewer picks up events by name.
         await make_push(f"{int(time.time() * 1000):013d}_{_seq:05d}")
 
+# A touch is only taken while no page is being drawn: from begin_page() (the
+# touch is accepted) until end_page()'s turn in the queue comes and the
+# tablet has drawn everything. Touches in between are ignored, not queued —
+# false triggers are frequent, and queueing them kept the panel busy with
+# pages nobody asked for.
+DRAIN_POLL_SEC = 1.0
+DRAIN_TIMEOUT_SEC = 300.0
+_busy = False
+
+
+def busy():
+    return ENABLED and _busy
+
+
+def begin_page():
+    global _busy
+    if ENABLED:
+        _busy = True
+
+
+def end_page():
+    """Called once a touch has pushed everything it will push. The page
+    stays busy until those pushes land and the tablet has drawn them."""
+    if not ENABLED:
+        return
+    _enqueue(lambda eid: _wait_drained())
+
+
+async def _wait_drained():
+    global _busy
+    loop = asyncio.get_event_loop()
+    deadline = time.time() + DRAIN_TIMEOUT_SEC
+    try:
+        while time.time() < deadline:
+            if await loop.run_in_executor(None, eink_memory_push.pending_events) == 0:
+                return
+            await asyncio.sleep(DRAIN_POLL_SEC)
+        rospy.logwarn("eink_hook: tablet still drawing after timeout; accepting touches again")
+    except Exception as e:
+        rospy.logwarn(f"eink_hook: could not check tablet events ({e}); accepting touches again")
+    finally:
+        _busy = False
+
+
 _image_dir = os.path.join(os.path.dirname(__file__), "../data/images")
 
 # Set by touch_image_camera_new.py's main() right after it reads its own

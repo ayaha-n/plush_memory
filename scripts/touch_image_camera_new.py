@@ -297,6 +297,7 @@ async def publish_to_web(kind: str):
             rospy.loginfo(f"Post-show auto hide (one by one) for {kind}")
     finally:
         displaying_states[kind] = False
+        eink_hook.end_page()
 
 
 def make_callback(kind: str):
@@ -311,7 +312,13 @@ def make_callback(kind: str):
             if displaying_states[kind]:
                 rospy.loginfo(f"Already displaying {kind}, skipping")
                 return
+            # e-ink run only: ignore every touch while a page is still being
+            # drawn (see eink_hook.busy). Always False for an html run.
+            if eink_hook.busy():
+                rospy.loginfo(f"E-ink still drawing, ignoring {kind}")
+                return
             
+            eink_hook.begin_page()
             displaying_states[kind] = True
             gen_session += 1
             asyncio.run_coroutine_threadsafe(publish_to_web(kind), loop)

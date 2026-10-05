@@ -358,6 +358,16 @@ def push_text(paragraphs, x, y, w, px=TEXT_PX, event_id=None, clear_first=False,
     return event_id
 
 
+def pending_events(host=EINK_HOST):
+    """How many events are still on the tablet — the viewer deletes each
+    event dir once it has finished drawing it, so 0 means the panel is done."""
+    out = subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=5", f"root@{host}",
+         f"ls -1 {EINK_APP_DIR}/events 2>/dev/null | wc -l"],
+        check=True, capture_output=True, text=True)
+    return int(out.stdout.strip() or 0)
+
+
 if __name__ == "__main__":
     import sys
 
