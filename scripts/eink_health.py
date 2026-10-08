@@ -8,6 +8,9 @@ from eink_memory_push import EINK_HOST, EINK_APP_DIR, DEVICE_ORIENTATIONS, ssh
 # Succeeds iff the viewer is running (BusyBox ps: the command is column 5).
 _VIEWER_RUNNING = "ps | awk '$5 ~ /(^|\\/)plush_memory_viewer$/ {found=1} END {exit !found}'"
 _TIMEOUT_SEC = 10
+# An event dir with no READY this long after it was last written is a push
+# that was cut off, not one still arriving.
+_INCOMPLETE_STALE_SEC = 600
 
 
 def check_startup(orientation, clear_events=False, host=EINK_HOST):
@@ -27,6 +30,16 @@ if test -r orientation.conf; then
     printf 'orientation_conf='; cat orientation.conf; printf '\\n'
 else echo orientation_conf=; fi
 if test -d events; then
+    # A push cut off half way (the PC stopped mid-send) never gets READY, so
+    # the viewer never draws or deletes it: drop those once they're stale.
+    now=$(date +%s); removed=0
+    for event in events/*; do
+        test -d "$event" && ! test -e "$event/READY" || continue
+        if [ $((now - $(stat -c %Y "$event"))) -gt {_INCOMPLETE_STALE_SEC} ]; then
+            rm -rf -- "$event" && removed=$((removed + 1))
+        fi
+    done
+    echo incomplete_removed=$removed
     count=0
     for event in events/* events/.[!.]* events/..?*; do
         test -d "$event" && count=$((count + 1))
@@ -50,6 +63,10 @@ else echo events=missing; fi
                           f"does not match ~eink_orientation={orientation}")
         else:
             rospy.loginfo(f"eink_health: orientation.conf matches {orientation}")
+        removed = fields.get("incomplete_removed", "0")
+        if removed.isdigit() and int(removed):
+            rospy.loginfo(f"eink_health: removed {removed} incomplete event directories "
+                          "left by a push that was cut off")
         events = fields.get("events", "")
         if not events.isdigit():
             rospy.logwarn("eink_health: events/ is missing; verify viewer installation")

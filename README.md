@@ -89,8 +89,10 @@ EINK_HOST=plush-eink rosrun plush_memory touch_image_camera_new.py _display_targ
 An e-ink launch checks the tablet once at startup (`scripts/eink_health.py`):
 SSH, that the viewer is running, leftover event directories, and that
 `orientation.conf` took `_eink_orientation`. Problems are logged as warnings and
-the node carries on. Leftover events are only counted; to delete them, close the
-viewer and start the node with `_eink_clear_stale_events:=True`.
+the node carries on. Event directories a cut-off push left without `READY` (the
+viewer never draws those) are removed once they're 10 minutes old; other leftovers
+are only counted — to delete them, close the viewer and start the node with
+`_eink_clear_stale_events:=True`.
 
 For exhibition use on firmware 3.27.1, turn **Settings > Battery > Standby**
 off to prevent automatic standby. This setting has been turned off on the
