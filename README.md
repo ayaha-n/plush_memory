@@ -244,7 +244,7 @@ All of it lives in `data/memory_texts.json` — one entry per part (`opening` / 
 
 The handwriting itself happens on the tablet: the viewer rasterizes the text in the bundled Yomogi font, thins it to 1px skeleton strokes and traces them into ordered pen paths, then draws a few points per tiny partial refresh — the technique from [riddle](https://github.com/MaximeRivest/riddle) (see [Dependencies and credits](#dependencies-and-credits)). Pure black strokes on white are the case UFAST reveals without fading, so text needs no color-landing step.
 
-Page layout (`scripts/eink_hook.py`): the memory text at the top, the closing at the bottom, and between them images in fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — each image fit inside its box.
+Page layout (`scripts/eink_hook.py`): the memory text at the top, the closing at the bottom, and between them images in fixed, non-overlapping slots — the newest one in a 520px box in the middle, up to ten 320px boxes around it — each image fit inside its box. Without generation (`_enable_generation:=False`) the page is looser: a random number of images, 3 to 9 (`SCATTER_MIN`), go in a grid of cells (3×3 upright with a wider middle; sideways, a full-height middle cell between two-by-two blocks), each at a random spot in its cell — one of them, at random, big in the middle, the rest random sizes smaller than it — and they're drawn top-left to bottom-right.
 
 ### The cover
 

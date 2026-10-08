@@ -61,12 +61,19 @@ SLOT_PX = 320
 LATEST_PX = 520
 
 
+def _grid(xs, ys):
+    """Cells (x, y, w, h) between consecutive xs and ys."""
+    return [(x0, y0, x1 - x0, y1 - y0)
+            for y0, y1 in zip(ys, ys[1:]) for x0, x1 in zip(xs, xs[1:])]
+
+
 class Layout:
     def __init__(self, name, screen, latest_center, slots, text_x, text_w,
-                 memory_text_y, touch_line_y):
+                 memory_text_y, touch_line_y, scatter_cells):
         self.name = name
         self.latest_center = latest_center
         self.slots = slots
+        self.scatter_cells = scatter_cells
         self.text_x, self.text_w = text_x, text_w
         self.memory_text_y, self.touch_line_y = memory_text_y, touch_line_y
         _, screen_h = screen
@@ -82,12 +89,20 @@ LAYOUTS = {
         slots=[(185, y) for y in (570, 950, 1330, 1710)]
         + [(1435, y) for y in (570, 950, 1330, 1710)]
         + [(810, 570), (810, 1710)],
-        text_x=70, text_w=1480, memory_text_y=60, touch_line_y=1920),
+        text_x=70, text_w=1480, memory_text_y=60, touch_line_y=1920,
+        # Pictures in x 50-1570, y 400-1890: 3x3, the middle column and row
+        # wider, so the middle cell is the big one.
+        scatter_cells=_grid(xs=(50, 510, 1110, 1570), ys=(400, 850, 1440, 1890))),
     # 2160x1620, pictures in y 400-1380: two columns of three on each side.
     "landscape": Layout(
         "landscape", (2160, 1620), latest_center=(1080, 890),
         slots=[(x, y) for x in (200, 540, 1620, 1960) for y in (560, 890, 1220)],
-        text_x=70, text_w=2020, memory_text_y=50, touch_line_y=1400),
+        text_x=70, text_w=2020, memory_text_y=50, touch_line_y=1400,
+        # Pictures in x 50-2110, y 390-1370: a full-height middle cell for the
+        # big one, two by two on either side of it.
+        scatter_cells=[(780, 390, 600, 980)]
+        + _grid(xs=(50, 415, 780), ys=(390, 880, 1370))
+        + _grid(xs=(1380, 1745, 2110), ys=(390, 880, 1370))),
 }
 
 # The layout of the page being drawn, set by show() once it has asked the
@@ -287,10 +302,46 @@ async def _push_text(paragraphs, y, slot, clear_first=False, page_start=False):
         rospy.logwarn(f"eink_hook: text push failed for {event_id}: {e}")
 
 
-def show(kind: str, selected_ids):
+def _scattered(layout, n):
+    """n (center, size, big) spots, in reading order (top-left to bottom-right
+    by each cell's top-left corner). The biggest cell is always one of them
+    and gets a big image, from the middle slot's size up to what fits; the
+    rest are n-1 cells picked at random, each image a random size from the
+    small slots' up to just under that. Each image sits at a random spot in
+    its cell."""
+    cells = layout.scatter_cells
+    big = max(cells, key=lambda c: min(c[2], c[3]))
+    chosen = random.sample([c for c in cells if c is not big], n - 1) + [big]
+    spots = []
+    for c in sorted(chosen, key=lambda c: (c[1], c[0])):
+        x, y, w, h = c
+        lo, hi = (LATEST_PX, min(w, h)) if c is big else (SLOT_PX, min(LATEST_PX - 1, w, h))
+        size = random.randint(lo, max(lo, int(hi)))
+        cx = x + size / 2 + random.uniform(0, max(0, w - size))
+        cy = y + size / 2 + random.uniform(0, max(0, h - size))
+        spots.append(((round(cx), round(cy)), size, c is big))
+    return spots
+
+
+# Without generation, how few images a page may show (see show()).
+SCATTER_MIN = 3
+
+# Set by show() when the page has no illustration still being generated
+# (_enable_generation:=False): the id it was told would be appended as the
+# latest, which instead goes in among the rest.
+_scatter_latest = None
+
+
+def show(kind: str, selected_ids, latest_id=None):
     """Mirror a SHOW_IMAGE broadcast as a fresh page: the part's memory,
     then up to 8 ids in slots, drawn top-left first. The slots themselves
     are picked at random so a short batch still spreads over the page.
+
+    With `latest_id` (no generation: the image the HTML appends as the
+    latest is already known), it's just one more to pick from: a random
+    number of them (SCATTER_MIN to all) go in a grid at random sizes, one at
+    random big in the middle, drawn top-left to bottom-right; append_latest()
+    then only writes the closing lines.
 
     Only the memory text asks the viewer for the touch's one blank of the
     panel (clear_first, gated by CLEAR_BEFORE_TOUCH) — a touch can push
@@ -298,9 +349,18 @@ def show(kind: str, selected_ids):
     No settle_after anywhere: measured on-device, the final color stage
     settles cleanly from its own single UFAST partial update, and
     request_full_refresh() would flash the *whole* panel."""
+    global _scatter_latest
     if not ENABLED:
         return
     ids = selected_ids[:8]
+    _scatter_latest = latest_id
+    if latest_id is not None:
+        # Without generation there's no real "latest": all of them are just
+        # picked from what's there. A random number, SCATTER_MIN up to all
+        # nine, so pages don't all look equally full; the last one of the
+        # (shuffled) pick goes big in the middle.
+        ids.append(latest_id)
+        ids = random.sample(ids, random.randint(min(SCATTER_MIN, len(ids)), len(ids)))
     paragraphs = memory_text.memory_paragraphs(kind)
 
     async def start_page():
@@ -312,12 +372,21 @@ def show(kind: str, selected_ids):
             rospy.logwarn(f"eink_hook: could not read tablet orientation ({e}); assuming portrait")
             orientation = "portrait"
         _layout = LAYOUTS[orientation]
-        chosen = random.sample(_layout.slots, len(ids))
-        _free_slots[:] = _reading_order(c for c in _layout.slots if c not in chosen)
+        if latest_id is not None:
+            # The last of the shuffled pick goes in the big cell, the others
+            # fill the rest.
+            spots = _scattered(_layout, min(len(ids), len(_layout.scatter_cells)))
+            rest = iter(ids[:-1])
+            placed = [(ids[-1] if big else next(rest), center, size)
+                      for center, size, big in spots]
+        else:
+            chosen = random.sample(_layout.slots, len(ids))
+            _free_slots[:] = _reading_order(c for c in _layout.slots if c not in chosen)
+            placed = [(img_id, slot, SLOT_PX) for img_id, slot in zip(ids, _reading_order(chosen))]
         await _push_text(paragraphs, _layout.memory_text_y, _layout.memory_slot,
                          clear_first=eink_memory_push.CLEAR_BEFORE_TOUCH, page_start=True)
-        for img_id, slot in zip(ids, _reading_order(chosen)):
-            await _push(kind, img_id, slot, SLOT_PX)
+        for img_id, center, size in placed:
+            await _push(kind, img_id, center, size)
 
     _enqueue(start_page)
 
@@ -336,7 +405,8 @@ def append_latest(kind: str, img_id):
     if not ENABLED:
         return
     lines = memory_text.touch_line(kind)
-    _enqueue(lambda: _push(kind, img_id, _layout.latest_center, LATEST_PX))
+    if img_id != _scatter_latest:  # already drawn among the rest by show()
+        _enqueue(lambda: _push(kind, img_id, _layout.latest_center, LATEST_PX))
     _enqueue(lambda: _push_text(lines, _layout.touch_line_y, _layout.touch_slot))
 
 

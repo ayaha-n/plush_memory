@@ -238,7 +238,7 @@ async def publish_to_web(kind: str):
         id_string = ",".join(str(i) for i in selected)
         if selected:
             await _ws_broadcast(f"SHOW_IMAGE:{kind}:{id_string}")
-        eink_hook.show(kind, selected)
+        eink_hook.show(kind, selected, latest_id)
         rospy.loginfo(f"Sent {kind} image list (n={len(selected)})")
         #await asyncio.sleep(k * 2.0 + 0.5)
         await _cooperative_sleep(k * 2.0 + 0.5, local_session)
